@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tank Drive Controller</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #0f0f0f;
+    color: #e0e0e0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 24px;
+  }
+  h1 { font-size: 1.5rem; font-weight: 500; letter-spacing: 0.5px; }
+
+  #status-bar {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+  .indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+  }
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #444;
+    transition: background 0.3s;
+  }
+  .dot.on { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
+  .dot.warn { background: #facc15; box-shadow: 0 0 6px #facc15; }
+  .dot.off { background: #444; }
+
+  #controls {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  button {
+    background: #1e1e1e;
+    color: #e0e0e0;
+    border: 1px solid #333;
+    padding: 10px 28px;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  button:hover { background: #2a2a2a; }
+  button:active { background: #333; }
+
+  .meter {
+    display: flex;
+    gap: 32px;
+    align-items: flex-end;
+    height: 160px;
+  }
+  .bar-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .bar {
+    width: 32px;
+    background: #222;
+    border-radius: 4px;
+    position: relative;
+    height: 120px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .bar-center {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: #444;
+    top: 50%;
+  }
+  .fill {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 50%;
+    background: #60a5fa;
+    transition: height 0.05s linear;
+  }
+  .fill-neg {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    background: #60a5fa;
+    transition: height 0.05s linear;
+  }
+  .fill.right { background: #f472b6; }
+  .fill-neg.right { background: #f472b6; }
+  .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; color: #888; }
+  .val { font-size: 0.7rem; color: #aaa; font-variant-numeric: tabular-nums; }
+
+  #log {
+    font-size: 0.7rem;
+    color: #555;
+    max-height: 80px;
+    overflow-y: auto;
+    width: 280px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<h1>Robot Tank Drive</h1>
+
+<div id="status-bar">
+  <div class="indicator">
+    <div class="dot off" id="serial-dot"></div>
+    <span id="serial-label">Serial</span>
+  </div>
+  <div class="indicator">
+    <div class="dot off" id="gamepad-dot"></div>
+    <span id="gamepad-label">Gamepad</span>
+  </div>
+  <div class="indicator">
+    <div class="dot off" id="stream-dot"></div>
+    <span id="stream-label">Transmitter</span>
+  </div>
+  <div class="indicator">
+    <div class="dot off" id="radio-dot"></div>
+    <span id="radio-label">Receiver</span>
+  </div>
+  <div class="indicator">
+    <div class="dot off" id="rtrip-dot"></div>
+    <span id="rtrip-label">Arduino</span>
+  </div>
+</div>
+
+<button id="connect-btn">Connect Serial</button>
+
+<div id="controls">
+  <div class="meter">
+    <div class="bar-wrap">
+      <div class="bar"><div class="bar-center"></div><div class="fill" id="left-fill"></div><div class="fill-neg" id="left-fill-neg"></div></div>
+      <div class="val" id="left-val">0</div>
+      <div class="label">Left</div>
+    </div>
+    <div class="bar-wrap">
+      <div class="bar"><div class="bar-center"></div><div class="fill right" id="right-fill"></div><div class="fill-neg right" id="right-fill-neg"></div></div>
+      <div class="val" id="right-val">0</div>
+      <div class="label">Right</div>
+    </div>
+  </div>
+</div>
+
+<div id="log"></div>
+
+<script>
+const DZ = 0.08;
+const RATE_HZ = 50;
+
+const serialDot   = document.getElementById('serial-dot');
+const serialLabel = document.getElementById('serial-label');
+const gamepadDot  = document.getElementById('gamepad-dot');
+const gamepadLabel = document.getElementById('gamepad-label');
+const streamDot   = document.getElementById('stream-dot');
+const streamLabel = document.getElementById('stream-label');
+const radioDot    = document.getElementById('radio-dot');
+const radioLabel  = document.getElementById('radio-label');
+const rtripDot    = document.getElementById('rtrip-dot');
+const rtripLabel  = document.getElementById('rtrip-label');
+const leftFill    = document.getElementById('left-fill');
+const leftFillNeg = document.getElementById('left-fill-neg');
+const rightFill   = document.getElementById('right-fill');
+const rightFillNeg = document.getElementById('right-fill-neg');
+const leftVal     = document.getElementById('left-val');
+const rightVal    = document.getElementById('right-val');
+const logEl       = document.getElementById('log');
+const connectBtn  = document.getElementById('connect-btn');
+
+let writer = null;
+let writing = false;
+let port = null;
+let reader = null;
+let lastAck = 0;
+let lastRadio = 0;
+let radioFail = false;
+let readerClosed = false;
+
+function setDot(el, cls) {
+  el.className = 'dot ' + cls;
+}
+
+function startReader() {
+  if (!port || reader) return;
+  reader = port.readable.getReader();
+  readerClosed = false;
+  (async function readLoop() {
+    try {
+      while (!readerClosed) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        for (let i = 0; i < value.length; i++) {
+          const b = value[i];
+          if (b === 0xAC) {
+            lastAck = Date.now();
+          } else if (b === 0xAE) {
+            lastRadio = Date.now();
+            radioFail = false;
+          } else if (b === 0xAD) {
+            radioFail = true;
+          }
+        }
+      }
+    } catch (e) {
+      // reader will be cleaned up on disconnect
+    }
+  })();
+}
+
+function stopReader() {
+  readerClosed = true;
+  if (reader) {
+    reader.cancel().catch(() => {});
+    reader = null;
+  }
+}
+
+function log(msg) {
+  const now = new Date().toLocaleTimeString();
+  logEl.textContent = `[${now}] ${msg}`;
+}
+
+function crc8(bytes) {
+  let crc = 0;
+  for (const b of bytes) {
+    crc ^= b;
+    for (let i = 0; i < 8; i++)
+      crc = (crc & 0x80) ? ((crc << 1) ^ 0x31) & 0xFF : (crc << 1) & 0xFF;
+  }
+  return crc;
+}
+
+function deadzone(v) {
+  return Math.abs(v) < DZ ? 0 : v;
+}
+
+function buildFrame(leftFloat, rightFloat, buttons = 0) {
+  const l = Math.round(Math.max(-1, Math.min(1, deadzone(leftFloat))) * 127);
+  const r = Math.round(Math.max(-1, Math.min(1, deadzone(rightFloat))) * 127);
+  const payload = new Uint8Array([
+    new Int8Array([l])[0],
+    new Int8Array([r])[0],
+    buttons & 0xFF,
+  ]);
+  return new Uint8Array([0xAB, ...payload, crc8(payload)]);
+}
+
+function getGamepadInputs(gp) {
+  return {
+    left:    -gp.axes[1],
+    right:   -gp.axes[3],
+    buttons: gp.buttons.reduce((mask, b, i) => mask | (b.pressed ? 1 << i : 0), 0),
+  };
+}
+
+function updateBars(leftFloat, rightFloat) {
+  const l = deadzone(leftFloat);
+  const r = deadzone(rightFloat);
+
+  if (l >= 0) {
+    leftFill.style.height = (l * 50) + '%';
+    leftFillNeg.style.height = '0';
+  } else {
+    leftFill.style.height = '0';
+    leftFillNeg.style.height = (-l * 50) + '%';
+  }
+
+  if (r >= 0) {
+    rightFill.style.height = (r * 50) + '%';
+    rightFillNeg.style.height = '0';
+  } else {
+    rightFill.style.height = '0';
+    rightFillNeg.style.height = (-r * 50) + '%';
+  }
+
+  leftVal.textContent  = Math.round(l * 127);
+  rightVal.textContent = Math.round(r * 127);
+}
+
+async function tick() {
+  const gp = navigator.getGamepads().find(g => g);
+  if (gp) {
+    const inputs = getGamepadInputs(gp);
+    setDot(gamepadDot, 'on');
+    gamepadLabel.textContent = gp.id.slice(0, 30);
+
+    updateBars(inputs.left, inputs.right);
+
+    // Transmitter: web → ESP32 serial write OK
+    // Receiver: ESP-NOW radio link (0xAE = success, 0xAD = fail)
+    if (writer && lastRadio > 0) {
+      const radioDelta = Date.now() - lastRadio;
+      if (radioFail) {
+        setDot(radioDot, 'warn');
+        radioLabel.textContent = 'Drop';
+      } else if (radioDelta < 200) {
+        setDot(radioDot, 'on');
+        radioLabel.textContent = radioDelta + 'ms';
+      } else if (radioDelta < 500) {
+        setDot(radioDot, 'warn');
+        radioLabel.textContent = radioDelta + 'ms';
+      } else {
+        setDot(radioDot, 'off');
+        radioLabel.textContent = radioDelta + 'ms';
+      }
+    } else if (writer) {
+      setDot(radioDot, 'off');
+      radioLabel.textContent = 'Waiting...';
+    }
+
+    // Arduino round trip (0xAC comes back from Arduino via receiver)
+    const since = Date.now() - lastAck;
+    if (writer && lastAck > 0) {
+      if (since < 200) setDot(rtripDot, 'on');
+      else if (since < 500) setDot(rtripDot, 'warn');
+      else setDot(rtripDot, 'off');
+      rtripLabel.textContent = since + 'ms';
+    } else if (writer) {
+      setDot(rtripDot, 'off');
+      rtripLabel.textContent = 'Waiting...';
+    }
+
+    if (writer && !writing) {
+      writing = true;
+      try {
+        await writer.write(buildFrame(inputs.left, inputs.right, inputs.buttons & 0xFF));
+        setDot(streamDot, 'on');
+      } catch (e) {
+        setDot(streamDot, 'warn');
+        log('Write error: ' + e.message);
+      }
+      writing = false;
+    }
+  } else {
+    setDot(gamepadDot, 'off');
+    gamepadLabel.textContent = 'No gamepad';
+  }
+  setTimeout(tick, 1000 / RATE_HZ);
+}
+
+async function connectSerial(existingPort) {
+  try {
+    const p = existingPort || await navigator.serial.requestPort();
+    await p.open({ baudRate: 921600 });
+    port = p;
+    writer = port.writable.getWriter();
+    setDot(serialDot, 'on');
+    serialLabel.textContent = 'Serial connected';
+    connectBtn.textContent = 'Connected';
+    connectBtn.disabled = true;
+    log('Serial opened at 921600');
+    startReader();
+
+    port.addEventListener('disconnect', () => {
+      setDot(serialDot, 'off');
+      setDot(radioDot, 'off');
+      setDot(rtripDot, 'off');
+      serialLabel.textContent = 'Serial disconnected';
+      connectBtn.textContent = 'Connect Serial';
+      connectBtn.disabled = false;
+      stopReader();
+      writer = null;
+      port = null;
+      log('Serial disconnected');
+    });
+  } catch (e) {
+    setDot(serialDot, 'off');
+    log('Serial error: ' + e.message);
+  }
+}
+
+connectBtn.onclick = () => connectSerial();
+
+window.addEventListener('gamepadconnected', e => {
+  setDot(gamepadDot, 'on');
+  gamepadLabel.textContent = e.gamepad.id.slice(0, 30);
+  log('Gamepad: ' + e.gamepad.id);
+});
+
+window.addEventListener('gamepaddisconnected', e => {
+  setDot(gamepadDot, 'off');
+  gamepadLabel.textContent = 'Gamepad disconnected';
+  updateBars(0, 0);
+  log('Gamepad disconnected');
+});
+
+tick();
+
+(async function autoConnect() {
+  const ports = await navigator.serial.getPorts();
+  if (ports.length > 0) {
+    log('Auto-connecting to paired device...');
+    await connectSerial(ports[0]);
+  }
+})();
+</script>
+</body>
+</html>
