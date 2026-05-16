@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "esp_mac.h"
+#include "esp_netif.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -77,9 +78,9 @@ static void wifi_init_ap(void)
     // Set static IP 192.168.4.1
     esp_netif_ip_info_t ip_info;
     memset(&ip_info, 0, sizeof(ip_info));
-    IP4_ADDR(&ip_info.ip, 192, 168, 4, 1);
-    IP4_ADDR(&ip_info.gw, 192, 168, 4, 1);
-    IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0);
+    ip_info.ip.addr = (192 << 24) | (168 << 16) | (4 << 8) | 1;
+    ip_info.gw.addr = (192 << 24) | (168 << 16) | (4 << 8) | 1;
+    ip_info.netmask.addr = (255 << 24) | (255 << 16) | (255 << 8) | 0;
     ESP_ERROR_CHECK(esp_netif_dhcps_stop(esp_netif_get_handle_from_ifkey("WIFI_AP_DEF")));
     ESP_ERROR_CHECK(esp_netif_set_ip_info(esp_netif_get_handle_from_ifkey("WIFI_AP_DEF"), &ip_info));
     ESP_ERROR_CHECK(esp_netif_dhcps_start(esp_netif_get_handle_from_ifkey("WIFI_AP_DEF")));

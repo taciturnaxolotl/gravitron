@@ -10,9 +10,4 @@ idf_component_register(
         "."
     EMBED_FILES
         "index.html"
-    REQUIRES
-        esp_camera
-        esp_http_server
-        nvs_flash
-        driver
 )

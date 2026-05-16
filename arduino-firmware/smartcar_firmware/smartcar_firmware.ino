@@ -81,6 +81,9 @@ unsigned long last_yaw_update = 0;
 // ─── Mode Button ──────────────────────────────────────────────
 volatile uint8_t key_value = 0;
 
+// ─── Global state ─────────────────────────────────────────────
+static uint8_t move_speed = 200;
+
 // ─── Forward Declarations ─────────────────────────────────────
 void motors_control(bool dirA, uint8_t spdA, bool dirB, uint8_t spdB);
 void motors_stop();
@@ -338,8 +341,6 @@ void handle_command(String cmd) {
     Serial.println(F("\\\"}"));
   }
 }
-
-static uint8_t move_speed = 200;
 
 // ═══════════════════════════════════════════════════════════════
 //  IR REMOTE HANDLER

@@ -183,9 +183,9 @@ static esp_err_t api_info_handler(httpd_req_t *req)
         }
     }
 
-    // WiFi info
+    // WiFi info — SSID is generated at runtime from MAC, hardcode prefix
     cJSON *wifi = cJSON_AddObjectToObject(root, "wifi");
-    cJSON_AddStringToObject(wifi, "ssid", CONFIG_ESP_WIFI_SSID);
+    cJSON_AddStringToObject(wifi, "ssid_prefix", "ELEGOO-");
     cJSON_AddStringToObject(wifi, "ip", "192.168.4.1");
 
     // Endpoints reference

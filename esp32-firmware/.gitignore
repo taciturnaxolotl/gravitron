@@ -1,6 +1,9 @@
 build/
+components/
 sdkconfig
 sdkconfig.old
+dependencies.lock
+managed_components/
 *.bin
 *.elf
 *.map
@@ -13,3 +16,4 @@ __pycache__/
 *.swo
 *~
 .DS_Store
+.cache/

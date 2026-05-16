@@ -169,7 +169,7 @@ static void handle_command(cJSON *json)
         cJSON *sv = cJSON_GetObjectItem(json, "servo");
         cJSON *ang = cJSON_GetObjectItem(json, "angle");
         if (!ang || !cJSON_IsNumber(ang)) return;
-        int which = sv_num_for_name(sv && cJSON_IsString(sv) ? sv->valuestring : NULL);
+        int which = servo_num_for_name(sv && cJSON_IsString(sv) ? sv->valuestring : NULL);
         snprintf(out, sizeof(out), "sv %d %d", which, ang->valueint);
     }
     else if (!strcmp(cmd_str, "servo_step")) {
