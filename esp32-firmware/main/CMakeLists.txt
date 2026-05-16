@@ -1,0 +1,18 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "camera.c"
+        "uart_bridge.c"
+        "websocket.c"
+        "http_server.c"
+        "cJSON.c"
+    INCLUDE_DIRS
+        "."
+    EMBED_FILES
+        "index.html"
+    REQUIRES
+        esp_camera
+        esp_http_server
+        nvs_flash
+        driver
+)

@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>Robot Board</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f0f14;color:#e0e0e0;min-height:100vh}
+header{background:#1a1a24;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #2a2a36}
+header h1{font-size:18px;font-weight:600}
+#status{font-size:12px;padding:4px 10px;border-radius:12px;background:#2a2a36}
+#status.connected{background:#1a3a1a;color:#4ade80}
+#status.disconnected{background:#3a1a1a;color:#f87171}
+.stream-box{max-width:800px;margin:12px auto;padding:0 8px}
+.stream-box img{width:100%;border-radius:8px;background:#1a1a24}
+.panel{max-width:800px;margin:0 auto 16px;padding:0 8px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+section{background:#1a1a24;border-radius:10px;padding:14px;border:1px solid #2a2a36}
+section h3{font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:10px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+button{
+  background:#2a2a36;color:#e0e0e0;border:1px solid #3a3a48;border-radius:6px;
+  padding:8px 14px;font-size:13px;cursor:pointer;transition:background .15s;
+  min-width:44px;touch-action:manipulation
+}
+button:active{background:#4a4a58}
+button.danger{background:#3a1a1a;border-color:#5a2a2a;color:#f87171}
+button.success{background:#1a3a1a;border-color:#2a5a2a;color:#4ade80}
+.dpad{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:4px;width:160px;margin:0 auto}
+.dpad button{padding:18px 0;font-size:20px}
+input[type=range]{width:100%;margin:4px 0;accent-color:#4ade80}
+label{font-size:11px;color:#888;display:block;margin-top:4px}
+@media(max-width:480px){
+  header h1{font-size:15px}
+  section{padding:10px}
+  button{padding:6px 10px;font-size:12px}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🤖 Robot Board</h1>
+  <span id="status" class="disconnected">Disconnected</span>
+</header>
+
+<div class="stream-box">
+  <img id="stream" src="/stream" alt="Camera stream" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22320%22 height=%22240%22><rect fill=%22%231a1a24%22 width=%22320%22 height=%22240%22/><text fill=%22%23888%22 x=%22160%22 y=%22120%22 text-anchor=%22middle%22 font-family=%22sans-serif%22>Stream loading...</text></svg>'">
+</div>
+
+<div class="panel">
+
+<section>
+  <h3>Movement</h3>
+  <div class="dpad">
+    <div></div><button id="btn-fwd">▲</button><div></div>
+    <button id="btn-left">◀</button><button id="btn-stop" class="danger">■</button><button id="btn-right">▶</button>
+    <div></div><button id="btn-back">▼</button><div></div>
+  </div>
+  <label>Speed: <span id="speed-val">150</span></label>
+  <input type="range" id="speed" min="60" max="255" value="150" step="5">
+  <label>Duration (ms, 0=indefinite): <span id="dur-val">0</span></label>
+  <input type="range" id="duration" min="0" max="5000" value="0" step="100">
+</section>
+
+<section>
+  <h3>Servo</h3>
+  <div class="row">
+    <button id="sv-pan-l">Pan ◀</button>
+    <button id="sv-pan-center">Center</button>
+    <button id="sv-pan-r">Pan ▶</button>
+  </div>
+  <div class="row" style="margin-top:6px">
+    <button id="sv-tilt-u">Tilt ▲</button>
+    <button id="sv-tilt-center">Center</button>
+    <button id="sv-tilt-d">Tilt ▼</button>
+  </div>
+  <label>Angle: <span id="sv-angle">90</span></label>
+  <input type="range" id="sv-angle-slider" min="10" max="170" value="90">
+</section>
+
+<section>
+  <h3>Modes</h3>
+  <div class="row">
+    <button id="mode-tracking">Line Track</button>
+    <button id="mode-obstacle">Obstacle</button>
+    <button id="mode-follow">Follow</button>
+    <button id="mode-standby" class="danger">Standby</button>
+  </div>
+</section>
+
+<section>
+  <h3>LED</h3>
+  <div class="row" style="align-items:center;gap:6px">
+    <input type="color" id="led-color" value="#ff0000" style="width:40px;height:32px;border:none;background:none;cursor:pointer">
+    <button id="led-set">Set</button>
+    <button id="led-off">Off</button>
+  </div>
+  <label>Brightness</label>
+  <div class="row">
+    <button id="led-dim">Dim</button>
+    <button id="led-bright">Bright</button>
+  </div>
+</section>
+
+<section>
+  <h3>Sensors</h3>
+  <div class="row">
+    <button id="sns-distance">Distance</button>
+    <button id="sns-obstacle">Obstacle?</button>
+    <button id="sns-ground">Ground?</button>
+  </div>
+  <div class="row" style="margin-top:6px">
+    <button id="sns-ir-l">IR Left</button>
+    <button id="sns-ir-m">IR Mid</button>
+    <button id="sns-ir-r">IR Right</button>
+  </div>
+</section>
+
+<section>
+  <h3>Camera</h3>
+  <div class="row">
+    <button id="cam-quality-down">Quality-</button>
+    <button id="cam-quality-up">Quality+</button>
+    <button id="cam-bright-down">Bright-</button>
+    <button id="cam-bright-up">Bright+</button>
+  </div>
+  <button id="cam-flip" style="margin-top:6px">Toggle VFlip</button>
+</section>
+
+<section>
+  <h3>Motor Tuning</h3>
+  <label>Left: <span id="motor-l-val">0</span></label>
+  <input type="range" id="motor-l" min="-255" max="255" value="0" step="5">
+  <label>Right: <span id="motor-r-val">0</span></label>
+  <input type="range" id="motor-r" min="-255" max="255" value="0" step="5">
+  <button id="motor-apply" class="success" style="margin-top:6px;width:100%">Apply</button>
+</section>
+
+<section>
+  <h3>Log</h3>
+  <pre id="log" style="font-size:10px;max-height:120px;overflow-y:auto;color:#666"></pre>
+</section>
+
+</div>
+
+<script>
+const WS_URL = `ws://${location.hostname}:80/ws`;
+let ws = null;
+let hbTimer = null;
+
+const $ = id => document.getElementById(id);
+
+function log(msg) {
+  const el = $('log');
+  el.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function send(cmd) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const json = JSON.stringify(cmd);
+  ws.send(json);
+  log('send: ' + json);
+}
+
+// ── WebSocket connection ──
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    $('status').textContent = 'Connected';
+    $('status').className = 'connected';
+    log('WebSocket connected');
+    startHeartbeat();
+  };
+
+  ws.onclose = () => {
+    $('status').textContent = 'Disconnected';
+    $('status').className = 'disconnected';
+    log('WebSocket closed — reconnecting in 2s');
+    stopHeartbeat();
+    setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => {
+    $('status').textContent = 'Error';
+    $('status').className = 'disconnected';
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'arduino') {
+        log('arduino: ' + JSON.stringify(msg.data));
+      } else if (msg.type === 'camera_info') {
+        log('camera: ' + JSON.stringify(msg.camera));
+      } else {
+        log('recv: ' + e.data);
+      }
+    } catch {
+      log('recv: ' + e.data);
+    }
+  };
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+  hbTimer = setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send('heartbeat');
+  }, 1000);
+}
+
+function stopHeartbeat() {
+  if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
+}
+
+connect();
+
+// ── D-pad movement ──
+
+function move(dir) {
+  const speed = parseInt($('speed').value);
+  const duration = parseInt($('duration').value);
+  const cmd = {cmd:'move', dir, speed};
+  if (duration > 0) cmd.time_ms = duration;
+  send(cmd);
+}
+
+function holdMove(dir) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const speed = parseInt($('speed').value);
+  send({cmd:'move', dir, speed});
+}
+
+function releaseMove() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  // Only stop if duration is 0 (indefinite mode)
+  if (parseInt($('duration').value) === 0) send({cmd:'stop'});
+}
+
+['fwd','back','left','right'].forEach(dir => {
+  const btn = $('btn-' + dir);
+  btn.addEventListener('mousedown',  () => holdMove(dir));
+  btn.addEventListener('touchstart', () => holdMove(dir), {passive:true});
+  btn.addEventListener('mouseup',   releaseMove);
+  btn.addEventListener('mouseleave',releaseMove);
+  btn.addEventListener('touchend',  releaseMove);
+  btn.addEventListener('touchcancel',releaseMove);
+});
+
+$('btn-stop').addEventListener('click', () => send({cmd:'stop'}));
+$('speed').addEventListener('input', () => $('speed-val').textContent = $('speed').value);
+$('duration').addEventListener('input', () => $('dur-val').textContent = $('duration').value);
+
+// ── Servo ──
+
+$('sv-pan-l').addEventListener('click',         () => send({cmd:'servo_step', action:4}));
+$('sv-pan-r').addEventListener('click',         () => send({cmd:'servo_step', action:3}));
+$('sv-pan-center').addEventListener('click',    () => send({cmd:'servo', servo:'pan', angle:90}));
+$('sv-tilt-u').addEventListener('click',        () => send({cmd:'servo_step', action:1}));
+$('sv-tilt-d').addEventListener('click',        () => send({cmd:'servo_step', action:2}));
+$('sv-tilt-center').addEventListener('click',   () => send({cmd:'servo', servo:'tilt', angle:90}));
+$('sv-angle-slider').addEventListener('input', () => {
+  $('sv-angle').textContent = $('sv-angle-slider').value;
+  send({cmd:'servo', servo:'pan', angle:parseInt($('sv-angle-slider').value)});
+});
+
+// ── Modes ──
+
+$('mode-tracking').addEventListener('click',  () => send({cmd:'mode', mode:'tracking'}));
+$('mode-obstacle').addEventListener('click',  () => send({cmd:'mode', mode:'obstacle'}));
+$('mode-follow').addEventListener('click',    () => send({cmd:'mode', mode:'follow'}));
+$('mode-standby').addEventListener('click',   () => send({cmd:'stop'}));
+
+// ── LED ──
+
+$('led-set').addEventListener('click', () => {
+  const hex = $('led-color').value;
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  send({cmd:'led', r, g, b});
+});
+$('led-off').addEventListener('click', () => send({cmd:'led', r:0, g:0, b:0}));
+$('led-dim').addEventListener('click', () => send({cmd:'led_brightness', direction:'down'}));
+$('led-bright').addEventListener('click', () => send({cmd:'led_brightness', direction:'up'}));
+
+// ── Sensors ──
+
+$('sns-distance').addEventListener('click', () => send({cmd:'distance'}));
+$('sns-obstacle').addEventListener('click', () => send({cmd:'obstacle'}));
+$('sns-ground').addEventListener('click', () => send({cmd:'ground'}));
+$('sns-ir-l').addEventListener('click', () => send({cmd:'ir', sensor:0}));
+$('sns-ir-m').addEventListener('click', () => send({cmd:'ir', sensor:1}));
+$('sns-ir-r').addEventListener('click', () => send({cmd:'ir', sensor:2}));
+
+// ── Camera settings ──
+
+$('cam-quality-down').addEventListener('click', () => fetch('/api/control?var=quality&val=20', {method:'POST'}));
+$('cam-quality-up').addEventListener('click', () => fetch('/api/control?var=quality&val=8', {method:'POST'}));
+$('cam-bright-down').addEventListener('click', () => fetch('/api/control?var=brightness&val=-2', {method:'POST'}));
+$('cam-bright-up').addEventListener('click', () => fetch('/api/control?var=brightness&val=2', {method:'POST'}));
+$('cam-flip').addEventListener('click', () => {
+  // Toggle: we can't read state easily, so just set to 1 (flipped)
+  fetch('/api/control?var=vflip&val=1', {method:'POST'});
+});
+
+// ── Motor tuning ──
+
+$('motor-l').addEventListener('input', () => $('motor-l-val').textContent = $('motor-l').value);
+$('motor-r').addEventListener('input', () => $('motor-r-val').textContent = $('motor-r').value);
+$('motor-apply').addEventListener('click', () => {
+  const absLeft = Math.abs(parseInt($('motor-l').value));
+  const absRight = Math.abs(parseInt($('motor-r').value));
+  send({cmd:'motors', left:absLeft, right:absRight});
+});
+</script>
+</body>
+</html>
