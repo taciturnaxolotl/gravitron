@@ -1,0 +1,9 @@
+# Arduino firmware for the ELEGOO Smart Robot Car V4.0
+# Flash via Arduino IDE: Board=Arduino UNO, Port=/dev/cu.usbmodem*
+build/
+*.o
+*.elf
+*.hex
+__pycache__/
+*.pyc
+.DS_Store
