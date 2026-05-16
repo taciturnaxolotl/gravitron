@@ -143,9 +143,9 @@ void setup() {
   mpu.initialize();
   if (mpu.testConnection()) {
     yaw_calibrate();
-    Serial.println(F("MPU6050 ready"));
+    Serial.println(F("{\\\"mpu6050\\\":true}"));
   } else {
-    Serial.println(F("MPU6050 not found"));
+    Serial.println(F("{\\\"mpu6050\\\":false}"));
   }
 
   // IR receiver
@@ -197,35 +197,35 @@ void handle_command(String cmd) {
   }
   else if (cmd == "b" || cmd == "back") {
     car_move(2, 200);
-    Serial.println(F("OK back"));
+    Serial.println(F("{\"ok\":\"back\"}"));
   }
   else if (cmd == "l" || cmd == "left") {
     car_move(3, 200);
-    Serial.println(F("OK left"));
+    Serial.println(F("{\"ok\":\"left\"}"));
   }
   else if (cmd == "r" || cmd == "right") {
     car_move(4, 200);
-    Serial.println(F("OK right"));
+    Serial.println(F("{\"ok\":\"right\"}"));
   }
   else if (cmd == "fl" || cmd == "forwardleft") {
     car_move(5, 200);
-    Serial.println(F("OK forward-left"));
+    Serial.println(F("{\"ok\":\"forward-left\"}"));
   }
   else if (cmd == "fr" || cmd == "forwardright") {
     car_move(7, 200);
-    Serial.println(F("OK forward-right"));
+    Serial.println(F("{\"ok\":\"forward-right\"}"));
   }
   else if (cmd == "bl" || cmd == "backleft") {
     car_move(6, 200);
-    Serial.println(F("OK back-left"));
+    Serial.println(F("{\"ok\":\"back-left\"}"));
   }
   else if (cmd == "br" || cmd == "backright") {
     car_move(8, 200);
-    Serial.println(F("OK back-right"));
+    Serial.println(F("{\"ok\":\"back-right\"}"));
   }
   else if (cmd == "s" || cmd == "stop") {
     car_stop();
-    Serial.println(F("OK stop"));
+    Serial.println(F("{\"ok\":\"stop\"}"));
   }
 
   // ── Motor raw: m <left_dir> <left_spd> <right_dir> <right_spd> ──
@@ -236,7 +236,7 @@ void handle_command(String cmd) {
       bool dirA = (a_dir == 1) ? DIR_FWD : DIR_BACK;
       bool dirB = (b_dir == 1) ? DIR_FWD : DIR_BACK;
       motors_control(dirA, constrain(a_spd, 0, 255), dirB, constrain(b_spd, 0, 255));
-      Serial.println(F("OK"));
+      Serial.println(F("{\"ok\":\"motors\"}"));
     }
   }
 
@@ -245,33 +245,34 @@ void handle_command(String cmd) {
     int which, angle;
     if (sscanf(cmd.c_str(), "sv %d %d", &which, &angle) == 2) {
       servo_write(which, constrain(angle, 0, 180));
-      Serial.println(F("OK"));
+      Serial.println(F("{\"ok\":\"servo\"}"));
     }
   }
 
   // ── Ultrasonic: us ──
   else if (cmd == "us") {
     uint16_t dist = ultrasonic_read();
-    Serial.print(F("Distance: "));
+    Serial.print(F("{\"distance\":"));
     Serial.print(dist);
-    Serial.println(F(" cm"));
+    Serial.println(F("}"));
   }
 
   // ── IR sensors: ir ──
   else if (cmd == "ir") {
-    Serial.print(F("L:"));
+    Serial.print(F("{\"ir\":{\"l\":"));
     Serial.print(ir_read(0));
-    Serial.print(F(" M:"));
+    Serial.print(F(",\"m\":"));
     Serial.print(ir_read(1));
-    Serial.print(F(" R:"));
-    Serial.println(ir_read(2));
+    Serial.print(F(",\"r\":"));
+    Serial.print(ir_read(2));
+    Serial.println(F("}}"));
   }
 
   // ── Battery: bat ──
   else if (cmd == "bat") {
-    Serial.print(F("Battery: "));
+    Serial.print(F("{\"battery\":"));
     Serial.print(battery_read());
-    Serial.println(F(" V"));
+    Serial.println(F("}"));
   }
 
   // ── LED: led <r> <g> <b> ──
@@ -279,14 +280,14 @@ void handle_command(String cmd) {
     int r, g, b;
     if (sscanf(cmd.c_str(), "led %d %d %d", &r, &g, &b) == 3) {
       led_set(constrain(r, 0, 255), constrain(g, 0, 255), constrain(b, 0, 255));
-      Serial.println(F("OK"));
+      Serial.println(F("{\"ok\":\"led\"}"));
     }
   }
 
   // ── LED off: ledoff ──
   else if (cmd == "ledoff") {
     led_off();
-    Serial.println(F("OK"));
+    Serial.println(F("{\"ok\":\"ledoff\"}"));
   }
 
   // ── Speed: speed <0-255> ── (sets speed for f/b/l/r commands)
@@ -294,21 +295,23 @@ void handle_command(String cmd) {
     int spd;
     if (sscanf(cmd.c_str(), "speed %d", &spd) == 1) {
       move_speed = constrain(spd, 0, 255);
-      Serial.print(F("OK speed="));
-      Serial.println(move_speed);
+      Serial.print(F("{\"speed\":"));
+      Serial.print(move_speed);
+      Serial.println(F("}"));
     }
   }
 
   // ── Yaw: yaw ──
   else if (cmd == "yaw") {
-    Serial.print(F("Yaw: "));
-    Serial.println(yaw_angle);
+    Serial.print(F("{\"yaw\":"));
+    Serial.print(yaw_angle, 2);
+    Serial.println(F("}"));
   }
 
   // ── Calibrate: cal ──
   else if (cmd == "cal") {
     yaw_calibrate();
-    Serial.println(F("OK calibrated"));
+    Serial.println(F("{\"ok\":\"calibrated\"}"));
   }
 
   // ── Help ──
@@ -330,8 +333,9 @@ void handle_command(String cmd) {
   }
 
   else {
-    Serial.print(F("Unknown: "));
-    Serial.println(cmd);
+    Serial.print(F("{\\\"unknown\\\":\\\""));
+    Serial.print(cmd);
+    Serial.println(F("\\\"}"));
   }
 }
 

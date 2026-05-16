@@ -112,30 +112,11 @@ int websocket_client_count(void)
 
 // ── Command translation ────────────────────────────────────────────
 
-static int dir_str_to_num(const char *dir)
+static int servo_num_for_name(const char *s)
 {
-    if (!strcmp(dir, "forward")) return 3;
-    if (!strcmp(dir, "backward") || !strcmp(dir, "back")) return 4;
-    if (!strcmp(dir, "left")) return 1;
-    if (!strcmp(dir, "right")) return 2;
-    return 0;
-}
-
-static int mode_str_to_num(const char *mode)
-{
-    if (!strcmp(mode, "tracking")) return 1;
-    if (!strcmp(mode, "obstacle")) return 2;
-    if (!strcmp(mode, "follow")) return 3;
-    if (!strcmp(mode, "standby")) return 0;
-    return -1;
-}
-
-static int servo_str_to_num(const char *s)
-{
-    if (!strcmp(s, "pan")) return 1;
+    if (!s) return 1;
     if (!strcmp(s, "tilt")) return 2;
-    if (!strcmp(s, "both")) return 3;
-    return 0;
+    return 1; // default pan
 }
 
 static void handle_command(cJSON *json)
@@ -144,103 +125,103 @@ static void handle_command(cJSON *json)
     if (!cmd || !cJSON_IsString(cmd)) return;
 
     const char *cmd_str = cmd->valuestring;
-    char out[256];
+    char out[128];
 
+    out[0] = '\0';
+
+    // ── Move — f/b/l/r ──
     if (!strcmp(cmd_str, "move")) {
         cJSON *dir  = cJSON_GetObjectItem(json, "dir");
         cJSON *spd  = cJSON_GetObjectItem(json, "speed");
-        cJSON *time = cJSON_GetObjectItem(json, "time_ms");
-
         if (!dir || !cJSON_IsString(dir)) return;
-        int d = dir_str_to_num(dir->valuestring);
-        if (!d) return;
-        int speed = spd && cJSON_IsNumber(spd) ? spd->valueint : 200;
 
-        if (time && cJSON_IsNumber(time)) {
-            snprintf(out, sizeof(out),
-                     "{\"N\":2,\"D1\":%d,\"D2\":%d,\"T\":%d}", d, speed, time->valueint);
-        } else {
-            snprintf(out, sizeof(out),
-                     "{\"N\":3,\"D1\":%d,\"D2\":%d}", d, speed);
+        const char *d = dir->valuestring;
+             if (!strcmp(d, "forward"))  snprintf(out, sizeof(out), "f");
+        else if (!strcmp(d, "backward") || !strcmp(d, "back")) snprintf(out, sizeof(out), "b");
+        else if (!strcmp(d, "left"))   snprintf(out, sizeof(out), "l");
+        else if (!strcmp(d, "right"))  snprintf(out, sizeof(out), "r");
+        else return;
+
+        // If speed was given, set it first
+        if (spd && cJSON_IsNumber(spd) && spd->valueint >= 0 && spd->valueint <= 255) {
+            char speed_cmd[16];
+            snprintf(speed_cmd, sizeof(speed_cmd), "speed %d", spd->valueint);
+            uart_bridge_send(speed_cmd, strlen(speed_cmd));
         }
     }
+    // ── Motors raw — m dirA spdA dirB spdB ──
     else if (!strcmp(cmd_str, "motors")) {
         cJSON *l = cJSON_GetObjectItem(json, "left");
         cJSON *r = cJSON_GetObjectItem(json, "right");
-        snprintf(out, sizeof(out),
-                 "{\"N\":4,\"D1\":%d,\"D2\":%d}",
-                 l && cJSON_IsNumber(l) ? l->valueint : 0,
-                 r && cJSON_IsNumber(r) ? r->valueint : 0);
+        int lv = l && cJSON_IsNumber(l) ? l->valueint : 0;
+        int rv = r && cJSON_IsNumber(r) ? r->valueint : 0;
+        // m <dirA> <spdA> <dirB> <spdB>: dir 1=fwd, 2=back
+        int dirA = rv >= 0 ? 1 : 2;
+        int dirB = lv >= 0 ? 1 : 2;
+        snprintf(out, sizeof(out), "m %d %d %d %d", dirA, abs(rv), dirB, abs(lv));
     }
+    // ── Stop — s ──
     else if (!strcmp(cmd_str, "stop")) {
-        snprintf(out, sizeof(out), "{\"N\":100}");
+        snprintf(out, sizeof(out), "s");
     }
+    // ── Servo — sv <which> <angle> ──
     else if (!strcmp(cmd_str, "servo")) {
         cJSON *sv = cJSON_GetObjectItem(json, "servo");
         cJSON *ang = cJSON_GetObjectItem(json, "angle");
-        if (!sv || !ang) return;
-        int s = servo_str_to_num(sv->valuestring);
-        if (!s) return;
-        snprintf(out, sizeof(out),
-                 "{\"N\":5,\"D1\":%d,\"D2\":%d}", s, ang->valueint * 10);
+        if (!ang || !cJSON_IsNumber(ang)) return;
+        int which = sv_num_for_name(sv && cJSON_IsString(sv) ? sv->valuestring : NULL);
+        snprintf(out, sizeof(out), "sv %d %d", which, ang->valueint);
     }
+    else if (!strcmp(cmd_str, "servo_step")) {
+        // step actions: 1=tilt-up, 2=tilt-down, 3=pan-right, 4=pan-left
+        cJSON *act = cJSON_GetObjectItem(json, "action");
+        int a = act && cJSON_IsNumber(act) ? act->valueint : 5;
+        int which = (a == 1 || a == 2) ? 2 : 1; // tilt or pan
+        int step = (a == 1 || a == 3) ? 10 : -10; // direction
+        int angle = 90 + step;
+        angle = (angle < 0) ? 0 : (angle > 180) ? 180 : angle;
+        snprintf(out, sizeof(out), "sv %d %d", which, angle);
+    }
+    // ── LED — led R G B / ledoff ──
     else if (!strcmp(cmd_str, "led")) {
         cJSON *r = cJSON_GetObjectItem(json, "r");
         cJSON *g = cJSON_GetObjectItem(json, "g");
         cJSON *b = cJSON_GetObjectItem(json, "b");
-        cJSON *time = cJSON_GetObjectItem(json, "time_ms");
-        if (time && cJSON_IsNumber(time)) {
-            snprintf(out, sizeof(out),
-                     "{\"N\":7,\"D1\":0,\"D2\":%d,\"D3\":%d,\"D4\":%d,\"T\":%d}",
-                     r ? r->valueint : 0, g ? g->valueint : 0, b ? b->valueint : 0,
-                     time->valueint);
+        int rv = r && cJSON_IsNumber(r) ? r->valueint : 0;
+        int gv = g && cJSON_IsNumber(g) ? g->valueint : 0;
+        int bv = b && cJSON_IsNumber(b) ? b->valueint : 0;
+        if (rv == 0 && gv == 0 && bv == 0) {
+            snprintf(out, sizeof(out), "ledoff");
         } else {
-            snprintf(out, sizeof(out),
-                     "{\"N\":8,\"D1\":0,\"D2\":%d,\"D3\":%d,\"D4\":%d}",
-                     r ? r->valueint : 0, g ? g->valueint : 0, b ? b->valueint : 0);
+            snprintf(out, sizeof(out), "led %d %d %d", rv, gv, bv);
         }
     }
-    else if (!strcmp(cmd_str, "led_brightness")) {
-        cJSON *dir = cJSON_GetObjectItem(json, "direction");
-        int d = dir && cJSON_IsString(dir) && !strcmp(dir->valuestring, "down") ? 2 : 1;
-        snprintf(out, sizeof(out), "{\"N\":105,\"D1\":%d}", d);
+    // ── Speed — speed N ──
+    else if (!strcmp(cmd_str, "speed")) {
+        cJSON *s = cJSON_GetObjectItem(json, "value");
+        int v = s && cJSON_IsNumber(s) ? s->valueint : 200;
+        snprintf(out, sizeof(out), "speed %d", v);
     }
-    else if (!strcmp(cmd_str, "servo_step")) {
-        cJSON *action = cJSON_GetObjectItem(json, "action");
-        int a = action && cJSON_IsNumber(action) ? action->valueint : 5;
-        if (a < 1) a = 1; if (a > 5) a = 5;
-        snprintf(out, sizeof(out), "{\"N\":106,\"D1\":%d}", a);
-    }
-    else if (!strcmp(cmd_str, "mode")) {
-        cJSON *m = cJSON_GetObjectItem(json, "mode");
-        if (!m || !cJSON_IsString(m)) return;
-        int mode_num = mode_str_to_num(m->valuestring);
-        if (mode_num < 0) return;
-        snprintf(out, sizeof(out), "{\"N\":101,\"D1\":%d}", mode_num);
-    }
-    else if (!strcmp(cmd_str, "rocker")) {
-        cJSON *d = cJSON_GetObjectItem(json, "direction");
-        if (!d || !cJSON_IsString(d)) return;
-        int rnum = 5;
-        if (!strcmp(d->valuestring, "forward")) rnum = 1;
-        else if (!strcmp(d->valuestring, "backward") || !strcmp(d->valuestring, "back")) rnum = 2;
-        else if (!strcmp(d->valuestring, "left")) rnum = 3;
-        else if (!strcmp(d->valuestring, "right")) rnum = 4;
-        snprintf(out, sizeof(out), "{\"N\":102,\"D1\":%d}", rnum);
-    }
-    else if (!strcmp(cmd_str, "distance")) {
-        snprintf(out, sizeof(out), "{\"N\":21,\"D1\":2}");
-    }
-    else if (!strcmp(cmd_str, "obstacle")) {
-        snprintf(out, sizeof(out), "{\"N\":21,\"D1\":1}");
+    // ── Sensor queries ──
+    else if (!strcmp(cmd_str, "distance") || !strcmp(cmd_str, "obstacle")) {
+        snprintf(out, sizeof(out), "us");
     }
     else if (!strcmp(cmd_str, "ir")) {
         cJSON *s = cJSON_GetObjectItem(json, "sensor");
-        int snum = s && cJSON_IsNumber(s) ? s->valueint : 0;
-        snprintf(out, sizeof(out), "{\"N\":22,\"D1\":%d}", snum);
+        snprintf(out, sizeof(out), "ir");
+        (void)s; // Arduino always returns all 3, client can filter
+    }
+    else if (!strcmp(cmd_str, "battery") || !strcmp(cmd_str, "bat")) {
+        snprintf(out, sizeof(out), "bat");
     }
     else if (!strcmp(cmd_str, "ground")) {
-        snprintf(out, sizeof(out), "{\"N\":23}");
+        snprintf(out, sizeof(out), "ir"); // closest proxy: all-black = off ground
+    }
+    else if (!strcmp(cmd_str, "yaw")) {
+        snprintf(out, sizeof(out), "yaw");
+    }
+    else if (!strcmp(cmd_str, "calibrate") || !strcmp(cmd_str, "cal")) {
+        snprintf(out, sizeof(out), "cal");
     }
     else if (!strcmp(cmd_str, "camera_info")) {
         websocket_send_camera_info();
@@ -259,13 +240,16 @@ static void handle_command(cJSON *json)
 
 // ── Arduino UART response → WebSocket broadcast ────────────────────
 
-static void on_uart_response(const char *json_str, int len)
+static void on_uart_response(const char *txt, int len)
 {
-    ESP_LOGI(TAG, "UART → WS: %.*s", len, json_str);
-
-    char buf[512];
-    snprintf(buf, sizeof(buf), "{\"type\":\"arduino\",\"data\":%.*s}", len, json_str);
-    websocket_broadcast(buf, strlen(buf));
+    // Arduino now sends JSON lines — wrap in a typed envelope for WS clients
+    char buf[528];
+    int written = snprintf(buf, sizeof(buf),
+                           "{\"type\":\"arduino\",\"data\":%.*s}",
+                           len, txt);
+    if (written > 0 && written < (int)sizeof(buf)) {
+        websocket_broadcast(buf, written);
+    }
 }
 
 // ── Heartbeat watchdog ─────────────────────────────────────────────
@@ -280,7 +264,7 @@ static void heartbeat_task(void *arg)
         int64_t now = esp_timer_get_time();
         if (now - g_last_heartbeat_us > HEARTBEAT_TIMEOUT_US) {
             ESP_LOGW(TAG, "Heartbeat timeout — stopping and disconnecting all clients");
-            uart_bridge_send("{\"N\":100}", 9);
+            uart_bridge_send("s", 1);
             ws_client_remove_all();
             g_last_heartbeat_us = esp_timer_get_time();
         }
