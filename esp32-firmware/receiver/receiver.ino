@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <esp_now.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 
 struct __attribute__((packed)) DrivePacket {
     int8_t left;
@@ -10,6 +11,10 @@ struct __attribute__((packed)) DrivePacket {
 
 static uint8_t sender_mac[6];
 static bool have_peer = false;
+
+static bool waiting_ack = false;
+static uint8_t ack_target[6];
+static unsigned long ack_deadline = 0;
 
 uint8_t crc8(const uint8_t* data, size_t len) {
     uint8_t crc = 0;
@@ -50,13 +55,10 @@ void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
     frame[4] = crc8(data, sizeof(DrivePacket));
     Serial1.write(frame, sizeof(frame));
 
-    // Read Arduino's ACK (non-blocking, with short timeout)
-    unsigned long start = millis();
-    while (Serial1.available() < 1 && millis() - start < 20) {}
-    if (Serial1.available() >= 1 && Serial1.read() == 0xAC) {
-        uint8_t ack = 0xAC;
-        esp_now_send(smac, &ack, 1);
-    }
+    // Defer ACK to loop() — never block in ESP-NOW callback
+    memcpy(ack_target, smac, 6);
+    ack_deadline = millis() + 20;
+    waiting_ack = true;
 }
 
 void setup() {
@@ -64,9 +66,22 @@ void setup() {
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+    esp_wifi_config_espnow_rate(WIFI_IF_STA, WIFI_PHY_RATE_54M);
 
     esp_now_init();
     esp_now_register_recv_cb(onRecv);
 }
 
-void loop() {}
+void loop() {
+    if (waiting_ack && millis() < ack_deadline && Serial1.available() >= 1) {
+        if (Serial1.read() == 0xAC) {
+            uint8_t ack = 0xAC;
+            esp_now_send(ack_target, &ack, 1);
+        }
+        waiting_ack = false;
+    } else if (waiting_ack && millis() >= ack_deadline) {
+        waiting_ack = false;
+    }
+}

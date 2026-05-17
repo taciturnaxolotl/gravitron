@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <esp_now.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 
 struct __attribute__((packed)) DrivePacket {
     int8_t left;
@@ -48,6 +49,9 @@ void setup() {
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    // esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+    // esp_wifi_config_espnow_rate(WIFI_IF_STA, WIFI_PHY_RATE_54M);
 
     esp_now_init();
     esp_now_register_send_cb(onSend);
@@ -61,8 +65,8 @@ void setup() {
 }
 
 void loop() {
-    DrivePacket latest;
-    bool got_new = false;
+    static DrivePacket latest = {};
+    static bool got_new = false;
 
     while (Serial.available()) {
         uint8_t b = Serial.read();

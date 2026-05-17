@@ -66,30 +66,26 @@ void setup() {
 }
 
 void loop() {
-  // Watchdog — stop motors if no valid packet within 300ms
-  if (millis() - last_packet_ms > 300) {
-    tank_drive(0, 0);
-    digitalWrite(PIN_STBY, LOW);
-  }
+    if (millis() - last_packet_ms > 300) {
+        tank_drive(0, 0);
+        digitalWrite(PIN_STBY, LOW);
+    }
 
-  // Drain to latest complete frame, discarding stale ones
-  while (Serial.available() >= 5) {
-    if (Serial.peek() != 0xAB) { Serial.read(); continue; }
+    // Discard any leading garbage bytes
+    while (Serial.available() && Serial.peek() != 0xAB) Serial.read();
 
-    // Peek ahead — if there's more than 5 bytes buffered, this frame is stale, skip it
-    if (Serial.available() > 5) { Serial.read(); continue; }
+    if (Serial.available() < 5) return; // wait for full frame
 
     Serial.read(); // consume 0xAB
-    int8_t left = Serial.read();
-    int8_t right = Serial.read();
+    int8_t left     = Serial.read();
+    int8_t right    = Serial.read();
     uint8_t buttons = Serial.read();
     uint8_t crc_rcvd = Serial.read();
 
     uint8_t payload[3] = {(uint8_t)left, (uint8_t)right, buttons};
     if (crc8(payload, 3) == crc_rcvd) {
-      tank_drive(left, right);
-      Serial.write((uint8_t)0xAC);
-      last_packet_ms = millis();
+        tank_drive(left, right);
+        Serial.write((uint8_t)0xAC);
+        last_packet_ms = millis();
     }
-  }
 }
