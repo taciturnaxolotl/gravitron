@@ -177,7 +177,7 @@
 
 <script>
 const DZ = 0.08;
-const RATE_HZ = 50;
+const RATE_HZ = 20;
 
 const serialDot   = document.getElementById('serial-dot');
 const serialLabel = document.getElementById('serial-label');
@@ -280,9 +280,13 @@ function buildFrame(leftFloat, rightFloat, buttons = 0) {
 }
 
 function getGamepadInputs(gp) {
+  const lt = gp.buttons[6].value;   // left trigger  → left forward
+  const rt = gp.buttons[7].value;   // right trigger → right forward
+  const rev = gp.buttons[1].pressed; // B button      → reverse both
+
   return {
-    left:    -gp.axes[1],
-    right:   -gp.axes[3],
+    left:    rev ? -lt : lt,
+    right:   rev ? -rt : rt,
     buttons: gp.buttons.reduce((mask, b, i) => mask | (b.pressed ? 1 << i : 0), 0),
   };
 }

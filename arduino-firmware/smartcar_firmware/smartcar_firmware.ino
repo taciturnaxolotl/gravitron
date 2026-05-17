@@ -52,6 +52,8 @@ static void tank_drive(int8_t left, int8_t right) {
   motor_write(dirR, spdR, PIN_PWMA, PIN_AIN1);
 }
 
+static unsigned long last_packet_ms = 0;
+
 void setup() {
   Serial.begin(115200);
 
@@ -64,17 +66,20 @@ void setup() {
 }
 
 void loop() {
-  while (Serial.available()) {
-    uint8_t b = Serial.read();
+  // Watchdog — stop motors if no valid packet within 300ms
+  if (millis() - last_packet_ms > 300) {
+    tank_drive(0, 0);
+    digitalWrite(PIN_STBY, LOW);
+  }
 
-    if (b != 0xAB) continue;
+  // Drain to latest complete frame, discarding stale ones
+  while (Serial.available() >= 5) {
+    if (Serial.peek() != 0xAB) { Serial.read(); continue; }
 
-    // Wait for 4 remaining bytes (5ms timeout)
-    unsigned long timeout = millis() + 5;
-    while (Serial.available() < 4 && millis() < timeout) {}
+    // Peek ahead — if there's more than 5 bytes buffered, this frame is stale, skip it
+    if (Serial.available() > 5) { Serial.read(); continue; }
 
-    if (Serial.available() < 4) break;
-
+    Serial.read(); // consume 0xAB
     int8_t left = Serial.read();
     int8_t right = Serial.read();
     uint8_t buttons = Serial.read();
@@ -84,6 +89,7 @@ void loop() {
     if (crc8(payload, 3) == crc_rcvd) {
       tank_drive(left, right);
       Serial.write((uint8_t)0xAC);
+      last_packet_ms = millis();
     }
   }
 }

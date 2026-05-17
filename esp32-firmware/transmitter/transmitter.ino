@@ -40,6 +40,9 @@ static State state = WAIT_MAGIC;
 static uint8_t buf[sizeof(DrivePacket) + 1];
 static uint8_t buf_idx = 0;
 
+const unsigned long SEND_INTERVAL_MS = 50;
+static unsigned long last_send = 0;
+
 void setup() {
     Serial.begin(921600);
 
@@ -58,6 +61,9 @@ void setup() {
 }
 
 void loop() {
+    DrivePacket latest;
+    bool got_new = false;
+
     while (Serial.available()) {
         uint8_t b = Serial.read();
 
@@ -73,13 +79,17 @@ void loop() {
                 if (buf_idx == sizeof(buf)) {
                     uint8_t expected = crc8(buf, sizeof(DrivePacket));
                     if (buf[sizeof(DrivePacket)] == expected) {
-                        DrivePacket pkt;
-                        memcpy(&pkt, buf, sizeof(DrivePacket));
-                        esp_now_send(peer_mac, (uint8_t*)&pkt, sizeof(pkt));
+                        memcpy(&latest, buf, sizeof(DrivePacket));
+                        got_new = true;
                     }
                     state = WAIT_MAGIC;
                 }
                 break;
         }
+    }
+
+    if (got_new && millis() - last_send >= SEND_INTERVAL_MS) {
+        esp_now_send(peer_mac, (uint8_t*)&latest, sizeof(latest));
+        last_send = millis();
     }
 }
