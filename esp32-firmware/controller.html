@@ -20,9 +20,13 @@
   h1 { font-size: 1.5rem; font-weight: 500; letter-spacing: 0.5px; }
 
   #status-bar {
-    display: flex;
+    display: none;
     gap: 16px;
     align-items: center;
+  }
+  #status-bar.open { display: flex; }
+  #status-toggle {
+    margin-top: -8px;
   }
   .indicator {
     display: flex;
@@ -110,7 +114,7 @@
   .fill.right { background: #f472b6; }
   .fill-neg.right { background: #f472b6; }
   .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; color: #888; }
-  .val { font-size: 0.7rem; color: #aaa; font-variant-numeric: tabular-nums; }
+  .val { font-size: 0.7rem; color: #aaa; font-variant-numeric: tabular-nums; width: 3ch; text-align: right; }
 
   #log {
     font-size: 0.7rem;
@@ -137,19 +141,22 @@
   </div>
   <div class="indicator">
     <div class="dot off" id="stream-dot"></div>
-    <span id="stream-label">Transmitter</span>
+    <span id="stream-label">Tx</span>
   </div>
   <div class="indicator">
     <div class="dot off" id="radio-dot"></div>
-    <span id="radio-label">Receiver</span>
+    <span id="radio-label">Rx</span>
   </div>
   <div class="indicator">
     <div class="dot off" id="rtrip-dot"></div>
-    <span id="rtrip-label">Arduino</span>
+    <span id="rtrip-label">Ard</span>
   </div>
 </div>
 
-<button id="connect-btn">Connect Serial</button>
+<div style="display: flex; gap: 12px; align-items: center;">
+  <button id="connect-btn">Connect Serial</button>
+  <button id="status-toggle">Status</button>
+</div>
 
 <div id="controls">
   <div class="meter">
@@ -199,6 +206,9 @@ let lastAck = 0;
 let lastRadio = 0;
 let radioFail = false;
 let readerClosed = false;
+let smoothAck = 0;
+let smoothRadio = 0;
+const ALPHA = 0.15;
 
 function setDot(el, cls) {
   el.className = 'dot ' + cls;
@@ -314,34 +324,38 @@ async function tick() {
     // Receiver: ESP-NOW radio link (0xAE = success, 0xAD = fail)
     if (writer && lastRadio > 0) {
       const radioDelta = Date.now() - lastRadio;
+      smoothRadio = smoothRadio === 0 ? radioDelta : smoothRadio + ALPHA * (radioDelta - smoothRadio);
+      const r = Math.round(smoothRadio);
       if (radioFail) {
         setDot(radioDot, 'warn');
         radioLabel.textContent = 'Drop';
       } else if (radioDelta < 200) {
         setDot(radioDot, 'on');
-        radioLabel.textContent = radioDelta + 'ms';
+        radioLabel.textContent = String(r).padStart(3) + 'ms';
       } else if (radioDelta < 500) {
         setDot(radioDot, 'warn');
-        radioLabel.textContent = radioDelta + 'ms';
+        radioLabel.textContent = String(r).padStart(3) + 'ms';
       } else {
         setDot(radioDot, 'off');
-        radioLabel.textContent = radioDelta + 'ms';
+        radioLabel.textContent = String(r).padStart(3) + 'ms';
       }
     } else if (writer) {
       setDot(radioDot, 'off');
-      radioLabel.textContent = 'Waiting...';
+      radioLabel.textContent = '---ms';
     }
 
     // Arduino round trip (0xAC comes back from Arduino via receiver)
     const since = Date.now() - lastAck;
     if (writer && lastAck > 0) {
+      smoothAck = smoothAck === 0 ? since : smoothAck + ALPHA * (since - smoothAck);
+      const a = Math.round(smoothAck);
       if (since < 200) setDot(rtripDot, 'on');
       else if (since < 500) setDot(rtripDot, 'warn');
       else setDot(rtripDot, 'off');
-      rtripLabel.textContent = since + 'ms';
+      rtripLabel.textContent = String(a).padStart(3) + 'ms';
     } else if (writer) {
       setDot(rtripDot, 'off');
-      rtripLabel.textContent = 'Waiting...';
+      rtripLabel.textContent = '---ms';
     }
 
     if (writer && !writing) {
@@ -407,6 +421,12 @@ window.addEventListener('gamepaddisconnected', e => {
   updateBars(0, 0);
   log('Gamepad disconnected');
 });
+
+const statusToggle = document.getElementById('status-toggle');
+const statusBar = document.getElementById('status-bar');
+statusToggle.onclick = () => {
+  statusBar.classList.toggle('open');
+};
 
 tick();
 

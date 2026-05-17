@@ -39,14 +39,14 @@ arduino-build: arduino-init
 	nix develop --command arduino-cli compile \
 		--fqbn $(ARDUINO_FQBN) \
 		--output-dir build/arduino \
-		arduino-firmware/smartcar_firmware.ino
+		arduino-firmware/smartcar_firmware/smartcar_firmware.ino
 
 arduino-flash: arduino-build
 	nix develop --command arduino-cli upload \
 		--fqbn $(ARDUINO_FQBN) \
 		--port $(ARDUINO_PORT) \
 		--input-dir build/arduino \
-		arduino-firmware/smartcar_firmware.ino
+		arduino-firmware/smartcar_firmware/smartcar_firmware.ino
 
 arduino-monitor:
 	nix develop --command arduino-cli monitor \

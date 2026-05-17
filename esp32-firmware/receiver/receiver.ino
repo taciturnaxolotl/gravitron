@@ -48,19 +48,19 @@ void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
     frame[0] = 0xAB;
     memcpy(&frame[1], data, sizeof(DrivePacket));
     frame[4] = crc8(data, sizeof(DrivePacket));
-    Serial.write(frame, sizeof(frame));
+    Serial1.write(frame, sizeof(frame));
 
     // Read Arduino's ACK (non-blocking, with short timeout)
     unsigned long start = millis();
-    while (Serial.available() < 1 && millis() - start < 5) {}
-    if (Serial.available() >= 1 && Serial.read() == 0xAC) {
+    while (Serial1.available() < 1 && millis() - start < 20) {}
+    if (Serial1.available() >= 1 && Serial1.read() == 0xAC) {
         uint8_t ack = 0xAC;
         esp_now_send(smac, &ack, 1);
     }
 }
 
 void setup() {
-    Serial.begin(115200);
+    Serial1.begin(115200, SERIAL_8N1, 4, 3);
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
