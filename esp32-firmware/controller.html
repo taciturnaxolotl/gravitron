@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Tank Drive Controller</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs" type="module"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -124,6 +125,60 @@
     width: 280px;
     text-align: center;
   }
+
+  #camera-wrap {
+    display: none;
+    position: relative;
+    width: 320px;
+    height: 240px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #333;
+  }
+  #camera-wrap.active { display: block; }
+  #cam-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+  }
+  #cam-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    transform: scaleX(-1);
+  }
+  #hand-status {
+    position: absolute;
+    bottom: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.7rem;
+    color: #aaa;
+    background: rgba(0,0,0,0.6);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+
+  .input-toggle {
+    display: flex;
+    gap: 0;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid #333;
+  }
+  .input-toggle button {
+    border: none;
+    border-radius: 0;
+    padding: 8px 18px;
+    font-size: 0.85rem;
+  }
+  .input-toggle button.active {
+    background: #3b82f6;
+    color: #fff;
+  }
 </style>
 </head>
 <body>
@@ -155,7 +210,17 @@
 
 <div style="display: flex; gap: 12px; align-items: center;">
   <button id="connect-btn">Connect Serial</button>
+  <div class="input-toggle">
+    <button id="mode-gamepad" class="active">Gamepad</button>
+    <button id="mode-hands">Hands</button>
+  </div>
   <button id="status-toggle">Status</button>
+</div>
+
+<div id="camera-wrap">
+  <video id="cam-video" autoplay playsinline></video>
+  <canvas id="cam-canvas"></canvas>
+  <div id="hand-status">Loading model...</div>
 </div>
 
 <div id="controls">
@@ -175,7 +240,9 @@
 
 <div id="log"></div>
 
-<script>
+<script type="module">
+import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs";
+
 const DZ = 0.08;
 const RATE_HZ = 20;
 
@@ -209,6 +276,20 @@ let readerClosed = false;
 let smoothAck = 0;
 let smoothRadio = 0;
 const ALPHA = 0.15;
+
+let inputMode = 'gamepad'; // 'gamepad' | 'hands'
+let handLandmarker = null;
+let handStream = null;
+let handInputs = { left: 0, right: 0, buttons: 0 };
+let lastHandDetect = 0;
+
+const camVideo = document.getElementById('cam-video');
+const camCanvas = document.getElementById('cam-canvas');
+const camCtx = camCanvas.getContext('2d');
+const cameraWrap = document.getElementById('camera-wrap');
+const handStatusEl = document.getElementById('hand-status');
+const modeGamepadBtn = document.getElementById('mode-gamepad');
+const modeHandsBtn = document.getElementById('mode-hands');
 
 function setDot(el, cls) {
   el.className = 'dot ' + cls;
@@ -268,6 +349,170 @@ function deadzone(v) {
   return Math.abs(v) < DZ ? 0 : v;
 }
 
+const PINCH_CLOSE = 0.04;
+const PINCH_OPEN = 0.14;
+
+function pinchToThrottle(landmarks) {
+  const thumb = landmarks[4];
+  const index = landmarks[8];
+  const dx = thumb.x - index.x;
+  const dy = thumb.y - index.y;
+  const dz = thumb.z - index.z;
+  const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+  return Math.max(0, Math.min(1, (dist - PINCH_CLOSE) / (PINCH_OPEN - PINCH_CLOSE)));
+}
+
+function wheelAngle(leftHand, rightHand) {
+  const lCenter = leftHand[9];
+  const rCenter = rightHand[9];
+  const dy = rCenter.y - lCenter.y;
+  const dx = rCenter.x - lCenter.x;
+  return Math.max(-1, Math.min(1, dy / Math.max(Math.abs(dx), 0.15)));
+}
+
+function drawLandmarks(results, steer) {
+  camCanvas.width = camVideo.videoWidth;
+  camCanvas.height = camVideo.videoHeight;
+  const w = camCanvas.width, h = camCanvas.height;
+  camCtx.clearRect(0, 0, w, h);
+
+  if (!results.landmarks) return;
+  let centers = [];
+  for (const hand of results.landmarks) {
+    camCtx.fillStyle = '#4ade80';
+    for (const pt of hand) {
+      camCtx.beginPath();
+      camCtx.arc(pt.x * w, pt.y * h, 3, 0, 2 * Math.PI);
+      camCtx.fill();
+    }
+    const t4 = hand[4], t8 = hand[8];
+    camCtx.strokeStyle = '#f472b6';
+    camCtx.lineWidth = 2;
+    camCtx.beginPath();
+    camCtx.moveTo(t4.x * w, t4.y * h);
+    camCtx.lineTo(t8.x * w, t8.y * h);
+    camCtx.stroke();
+    centers.push({ x: hand[9].x * w, y: hand[9].y * h });
+  }
+  if (centers.length === 2) {
+    camCtx.strokeStyle = '#facc15';
+    camCtx.lineWidth = 3;
+    camCtx.setLineDash([8, 6]);
+    camCtx.beginPath();
+    camCtx.moveTo(centers[0].x, centers[0].y);
+    camCtx.lineTo(centers[1].x, centers[1].y);
+    camCtx.stroke();
+    camCtx.setLineDash([]);
+  }
+}
+
+function processHands(results) {
+  let leftHand = null, rightHand = null;
+
+  if (results.landmarks && results.handedness) {
+    for (let i = 0; i < results.landmarks.length; i++) {
+      const label = results.handedness[i][0].categoryName;
+      if (label === 'Left'  && !leftHand)  leftHand  = results.landmarks[i];
+      if (label === 'Right' && !rightHand) rightHand = results.landmarks[i];
+    }
+  }
+
+  let throttle = 0, steer = 0;
+  let left = 0, right = 0;
+  const statusParts = [];
+
+  if (leftHand && rightHand) {
+    steer = wheelAngle(leftHand, rightHand);
+    const avgY = (leftHand[0].y + rightHand[0].y) / 2;
+    const t = Math.max(0, Math.min(1, 1 - avgY / 0.8));
+    throttle = Math.exp(-6 * (1 - t * t));
+
+    left  = Math.max(-1, Math.min(1, throttle * (1 + steer)));
+    right = Math.max(-1, Math.min(1, throttle * (1 - steer)));
+
+    const deg = Math.round(steer * 45);
+    statusParts.push('Throttle:' + Math.round(throttle * 100) + '%');
+    statusParts.push('Steer:' + (deg >= 0 ? '+' : '') + deg + '°');
+  } else if (leftHand || rightHand) {
+    const hand = leftHand || rightHand;
+    const t = Math.max(0, Math.min(1, 1 - hand[0].y / 0.8));
+    throttle = Math.exp(-6 * (1 - t * t));
+    left = throttle;
+    right = throttle;
+    statusParts.push('1 hand — straight ' + Math.round(throttle * 100) + '%');
+  }
+
+  drawLandmarks(results, steer);
+
+  handInputs = { left, right, buttons: 0 };
+  lastHandDetect = Date.now();
+  handStatusEl.textContent = statusParts.length ? statusParts.join('  ') : 'No hands detected';
+}
+
+async function initHandTracking() {
+  try {
+    const vision = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm"
+    );
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+        delegate: "GPU"
+      },
+      numHands: 2,
+      runningMode: "VIDEO",
+    });
+    handStatusEl.textContent = 'Model ready';
+    log('Hand tracking model loaded');
+  } catch (e) {
+    handStatusEl.textContent = 'Model failed';
+    log('Hand tracking error: ' + e.message);
+  }
+}
+
+async function startCamera() {
+  if (handStream) return;
+  try {
+    handStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
+    camVideo.srcObject = handStream;
+    cameraWrap.classList.add('active');
+    if (!handLandmarker) {
+      await initHandTracking();
+    }
+    runHandLoop();
+  } catch (e) {
+    log('Camera error: ' + e.message);
+  }
+}
+
+function stopCamera() {
+  if (handStream) {
+    handStream.getTracks().forEach(t => t.stop());
+    handStream = null;
+  }
+  camVideo.srcObject = null;
+  cameraWrap.classList.remove('active');
+  handInputs = { left: 0, right: 0, buttons: 0 };
+}
+
+let handLoopRunning = false;
+function runHandLoop() {
+  if (handLoopRunning) return;
+  handLoopRunning = true;
+  function step() {
+    if (inputMode !== 'hands' || !handLandmarker || !handStream) {
+      handLoopRunning = false;
+      return;
+    }
+    if (camVideo.readyState >= 2) {
+      const results = handLandmarker.detectForVideo(camVideo, performance.now());
+      processHands(results);
+    }
+    requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
 function buildFrame(leftFloat, rightFloat, buttons = 0) {
   const l = Math.round(Math.max(-1, Math.min(1, deadzone(leftFloat))) * 127);
   const r = Math.round(Math.max(-1, Math.min(1, deadzone(rightFloat))) * 127);
@@ -316,12 +561,27 @@ function updateBars(leftFloat, rightFloat) {
 }
 
 async function tick() {
-  const gp = navigator.getGamepads().find(g => g);
-  if (gp) {
-    const inputs = getGamepadInputs(gp);
-    setDot(gamepadDot, 'on');
-    gamepadLabel.textContent = gp.id.slice(0, 30);
+  let inputs = null;
 
+  if (inputMode === 'hands') {
+    if (Date.now() - lastHandDetect < 500) {
+      inputs = handInputs;
+      setDot(gamepadDot, 'on');
+      gamepadLabel.textContent = 'Hand tracking';
+    } else {
+      setDot(gamepadDot, 'off');
+      gamepadLabel.textContent = 'No hands';
+    }
+  } else {
+    const gp = navigator.getGamepads().find(g => g);
+    if (gp) {
+      inputs = getGamepadInputs(gp);
+      setDot(gamepadDot, 'on');
+      gamepadLabel.textContent = gp.id.slice(0, 30);
+    }
+  }
+
+  if (inputs) {
     updateBars(inputs.left, inputs.right);
 
     // Transmitter: web → ESP32 serial write OK
@@ -374,8 +634,11 @@ async function tick() {
       writing = false;
     }
   } else {
-    setDot(gamepadDot, 'off');
-    gamepadLabel.textContent = 'No gamepad';
+    if (inputMode === 'gamepad') {
+      setDot(gamepadDot, 'off');
+      gamepadLabel.textContent = 'No gamepad';
+    }
+    updateBars(0, 0);
   }
   setTimeout(tick, 1000 / RATE_HZ);
 }
@@ -430,6 +693,20 @@ const statusToggle = document.getElementById('status-toggle');
 const statusBar = document.getElementById('status-bar');
 statusToggle.onclick = () => {
   statusBar.classList.toggle('open');
+};
+
+modeGamepadBtn.onclick = () => {
+  inputMode = 'gamepad';
+  modeGamepadBtn.classList.add('active');
+  modeHandsBtn.classList.remove('active');
+  stopCamera();
+};
+
+modeHandsBtn.onclick = async () => {
+  inputMode = 'hands';
+  modeHandsBtn.classList.add('active');
+  modeGamepadBtn.classList.remove('active');
+  await startCamera();
 };
 
 tick();
