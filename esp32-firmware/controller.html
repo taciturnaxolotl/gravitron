@@ -154,7 +154,6 @@
     left: 0;
     width: 100%;
     height: 100%;
-    transform: scaleX(-1);
   }
   #hand-status {
     position: absolute;
@@ -356,8 +355,11 @@ function deadzone(v) {
   return Math.abs(v) < DZ ? 0 : v;
 }
 
-let heldThrottle = 0;
-let lastSteer = 0;
+let storedThrottle = 0;
+let driving = false;
+
+const PINCH_CLOSE = 0.09;
+const THROTTLE_ZONE = 0.2; // left 20% of frame
 
 function isClenched(landmarks) {
   const thumb = landmarks[4];
@@ -365,107 +367,140 @@ function isClenched(landmarks) {
   const dx = thumb.x - index.x;
   const dy = thumb.y - index.y;
   const dz = thumb.z - index.z;
-  const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-  return dist < 0.07;
+  return Math.sqrt(dx*dx + dy*dy + dz*dz) < PINCH_CLOSE;
 }
 
-function drawLandmarks(results, steer, throttle) {
+function drawOverlay(results, steer, throttle, driving) {
   camCanvas.width = camVideo.videoWidth;
   camCanvas.height = camVideo.videoHeight;
   const w = camCanvas.width, h = camCanvas.height;
   camCtx.clearRect(0, 0, w, h);
 
-  if (!results.landmarks) return;
-  for (const hand of results.landmarks) {
-    camCtx.fillStyle = '#4ade80';
-    for (const pt of hand) {
-      camCtx.beginPath();
-      camCtx.arc(pt.x * w, pt.y * h, 3, 0, 2 * Math.PI);
-      camCtx.fill();
-    }
-  }
+  // Mirror helper: camera landmarks have x=0 on left of camera frame,
+  // but the video is CSS-mirrored so x=0 appears on the RIGHT of screen.
+  // Canvas is NOT mirrored, so we flip x to match the mirrored video.
+  const mx = (nx) => w - nx * w;  // normalized -> pixel, mirrored
+  const mxp = (px) => w - px;     // pixel -> pixel, mirrored
 
-  // Steer indicator — vertical line at left hand x
-  const steerX = ((steer + 1) / 2) * w;
-  camCtx.strokeStyle = '#facc15';
-  camCtx.lineWidth = 3;
-  camCtx.setLineDash([8, 6]);
+  // Zone divider — throttle is camera-left (x < 0.2) which appears on screen-RIGHT
+  const zoneXpx = mx(THROTTLE_ZONE); // screen-right side
+  camCtx.strokeStyle = '#555';
+  camCtx.lineWidth = 1;
+  camCtx.setLineDash([4, 4]);
   camCtx.beginPath();
-  camCtx.moveTo(steerX, 0);
-  camCtx.lineTo(steerX, h);
+  camCtx.moveTo(zoneXpx, 0);
+  camCtx.lineTo(zoneXpx, h);
   camCtx.stroke();
   camCtx.setLineDash([]);
 
-  camCtx.fillStyle = '#facc15';
-  camCtx.font = 'bold 16px monospace';
+  camCtx.fillStyle = '#555';
+  camCtx.font = '11px sans-serif';
   camCtx.textAlign = 'center';
-  camCtx.fillText('STEER', steerX, 20);
+  camCtx.fillText('THROTTLE', (zoneXpx + w) / 2, h - 8);
+  camCtx.fillText('STEER', zoneXpx / 2, h - 8);
 
-  // Throttle bar — right side (canvas is mirrored, so draw left)
-  const barX = 10;
-  const barW = 14;
+  // Draw hand landmarks
+  if (results.landmarks) {
+    for (const hand of results.landmarks) {
+      camCtx.fillStyle = '#4ade80';
+      for (const pt of hand) {
+        camCtx.beginPath();
+        camCtx.arc(mx(pt.x), pt.y * h, 3, 0, 2 * Math.PI);
+        camCtx.fill();
+      }
+    }
+  }
+
+  // Steer line between hands in steer zone
+  if (results.landmarks) {
+    const steerHands = results.landmarks.filter(lm => lm[9].x >= THROTTLE_ZONE);
+    if (steerHands.length === 2) {
+      const c0 = { x: mx(steerHands[0][9].x), y: steerHands[0][9].y * h };
+      const c1 = { x: mx(steerHands[1][9].x), y: steerHands[1][9].y * h };
+      camCtx.strokeStyle = driving ? '#facc15' : '#666';
+      camCtx.lineWidth = 3;
+      camCtx.beginPath();
+      camCtx.moveTo(c0.x, c0.y);
+      camCtx.lineTo(c1.x, c1.y);
+      camCtx.stroke();
+    }
+  }
+
+  // Throttle bar — drawn on screen-right (camera-left zone)
+  const barMargin = 10;
+  const barW = (w - zoneXpx) - 2 * barMargin;
+  const barX = zoneXpx + barMargin;
   const barH = h - 40;
   const barY = 20;
   const fillH = throttle * barH;
   camCtx.strokeStyle = '#555';
   camCtx.lineWidth = 2;
   camCtx.strokeRect(barX, barY, barW, barH);
-  camCtx.fillStyle = '#4ade80';
+  camCtx.fillStyle = driving ? '#4ade80' : '#ef4444';
   camCtx.fillRect(barX, barY + barH - fillH, barW, fillH);
-  camCtx.fillStyle = '#4ade80';
   camCtx.font = 'bold 14px monospace';
-  camCtx.textAlign = 'left';
-  camCtx.fillText(Math.round(throttle * 100) + '%', barX, barY - 6);
+  camCtx.textAlign = 'center';
+  camCtx.fillStyle = driving ? '#4ade80' : '#ef4444';
+  camCtx.fillText(
+    driving ? Math.round(throttle * 100) + '%' : (throttle > 0 ? Math.round(throttle * 100) + '% STOPPED' : 'STOPPED'),
+    barX + barW / 2,
+    barY - 6
+  );
 }
 
 function processHands(results) {
-  let leftHand = null, rightHand = null;
+  const statusParts = [];
+  let steer = 0;
+  let left = 0, right = 0;
 
-  if (results.landmarks && results.handedness) {
-    for (let i = 0; i < results.landmarks.length; i++) {
-      const label = results.handedness[i][0].categoryName;
-      if (label === 'Left'  && !leftHand)  leftHand  = results.landmarks[i];
-      if (label === 'Right' && !rightHand) rightHand = results.landmarks[i];
-    }
-    // Fallback if handedness missing: leftmost = left, rightmost = right
-    if (!leftHand || !rightHand) {
-      for (const lm of results.landmarks) {
-        const side = lm[9].x < 0.5 ? 'left' : 'right';
-        if (side === 'left'  && !leftHand)  leftHand = lm;
-        if (side === 'right' && !rightHand) rightHand = lm;
+  // Separate hands into throttle zone (left 20%) and steer zone (right 80%)
+  let throttleHand = null;
+  const steerHands = [];
+
+  if (results.landmarks) {
+    for (const lm of results.landmarks) {
+      if (lm[9].x < THROTTLE_ZONE) {
+        throttleHand = lm;
+      } else {
+        steerHands.push(lm);
       }
     }
   }
 
-  let throttle = heldThrottle;
-  let steer = 0;
-  let left = 0, right = 0;
-  const statusParts = [];
-
-  if (leftHand) {
-    steer = Math.max(-1, Math.min(1, (leftHand[9].x - 0.5) * 4));
-    lastSteer = steer;
-    statusParts.push('Steer:' + (steer >= 0 ? '+' : '') + Math.round(steer * 100) + '%');
-  } else {
-    steer = lastSteer;
+  // Throttle: pinch in left zone sets value, persists on release
+  if (throttleHand && isClenched(throttleHand)) {
+    storedThrottle = Math.max(0, Math.min(1, 1 - throttleHand[0].y / 0.9));
+    statusParts.push('Throttle:' + Math.round(storedThrottle * 100) + '%');
+  } else if (throttleHand) {
+    statusParts.push('Throttle:' + Math.round(storedThrottle * 100) + '% (set)');
   }
 
-  if (rightHand) {
-    if (isClenched(rightHand)) {
-      throttle = Math.max(0, Math.min(1, 1 - rightHand[0].y / 0.9));
-      heldThrottle = throttle;
-      statusParts.push('Throttle:' + Math.round(throttle * 100) + '% (held)');
+  // Steer: both hands in steer zone, both clenched
+  driving = false;
+  if (steerHands.length >= 2) {
+    const h0 = steerHands[0], h1 = steerHands[1];
+    const bothClenched = isClenched(h0) && isClenched(h1);
+    if (bothClenched) {
+      const lx = h0[9].x, ly = h0[9].y;
+      const rx = h1[9].x, ry = h1[9].y;
+      const dx = rx - lx, dy = ry - ly;
+      steer = Math.max(-1, Math.min(1, dy / Math.max(Math.abs(dx), 0.15)));
+      driving = true;
+      statusParts.push('Steer:' + (steer >= 0 ? '+' : '') + Math.round(steer * 100) + '%');
     } else {
-      statusParts.push('Throttle:' + Math.round(throttle * 100) + '%');
+      statusParts.push('Open hands — stopped');
     }
+  } else if (steerHands.length === 1) {
+    statusParts.push('Need 2 hands to steer');
   }
 
-  if (leftHand || rightHand) {
-    left  = Math.max(-1, Math.min(1, throttle * (1 + steer)));
-    right = Math.max(-1, Math.min(1, throttle * (1 - steer)));
+  // Apply motor output only when driving
+  if (driving && storedThrottle > 0) {
+    left  = Math.max(-1, Math.min(1, storedThrottle * (1 + steer)));
+    right = Math.max(-1, Math.min(1, storedThrottle * (1 - steer)));
   }
 
-  drawLandmarks(results, steer, throttle);
+  drawOverlay(results, steer, storedThrottle, driving);
 
   handInputs = { left, right, buttons: 0 };
   lastHandDetect = Date.now();
