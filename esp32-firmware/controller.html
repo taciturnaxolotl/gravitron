@@ -1032,6 +1032,8 @@ modeHandsBtn.onclick = async () => {
   modeHandsBtn.classList.add('active');
   modeGamepadBtn.classList.remove('active');
   cameraWrap.classList.remove('hidden');
+  await startLocalWebcam();
+  runHandLoop();
 };
 
 const estopBtn = document.getElementById('estop-enable');
