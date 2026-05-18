@@ -2,6 +2,13 @@
 
 A gesture-controlled robot built on the ELEGOO Smart Robot Car V4.0. You drive it with your hands in front of a webcam and see through its eyes via a phone strapped to the chassis. The whole thing runs on ESP-NOW for low-latency radio, WebRTC for the camera feed, and MediaPipe for hand tracking.
 
+<img width="1280" height="960" alt="IMG_9621 Large" src="https://github.com/user-attachments/assets/2f5daba7-e0ec-4028-a184-a25964ca4558" />
+<img width="960" height="1280" alt="IMG_9625 Large" src="https://github.com/user-attachments/assets/f69f6471-1070-4c2f-a1f6-258c938398b7" />
+<img width="960" height="1280" alt="IMG_9624 Large" src="https://github.com/user-attachments/assets/612724be-0580-40f5-badf-00fd5b9382f3" />
+<img width="1280" height="960" alt="IMG_9623 Large" src="https://github.com/user-attachments/assets/a72a6477-d184-4190-9d74-b4edc4d30b8f" />
+<img width="1280" height="960" alt="IMG_9622 Large" src="https://github.com/user-attachments/assets/a2a72bc9-c3fb-4793-8756-64e7cf22b5da" />
+
+
 ## How it works
 
 ```
