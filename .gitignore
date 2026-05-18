@@ -1,3 +1,5 @@
 .direnv/
 build/
 .DS_Store
+server/certs/
+server/node_modules/

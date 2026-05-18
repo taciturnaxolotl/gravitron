@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Tank Drive Controller</title>
+<title>K2-B4 Control</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <script type="importmap">
 {
   "imports": {
@@ -27,13 +28,9 @@
   h1 { font-size: 1.5rem; font-weight: 500; letter-spacing: 0.5px; }
 
   #status-bar {
-    display: none;
+    display: flex;
     gap: 16px;
     align-items: center;
-  }
-  #status-bar.open { display: flex; }
-  #status-toggle {
-    margin-top: -8px;
   }
   .indicator {
     display: flex;
@@ -53,10 +50,61 @@
   .dot.off { background: #444; }
 
   #controls {
+    display: none;
+  }
+
+  #main-display {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .side-bar {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 12px;
+    gap: 4px;
+  }
+  .side-bar .bar {
+    width: 28px;
+    height: 200px;
+    background: #222;
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+  }
+  .side-bar .bar-center {
+    position: absolute;
+    left: 0; right: 0;
+    height: 2px;
+    background: #444;
+    top: 50%;
+  }
+  .side-bar .fill {
+    position: absolute;
+    left: 0; right: 0;
+    bottom: 50%;
+    background: #60a5fa;
+    transition: height 0.05s linear;
+  }
+  .side-bar .fill-neg {
+    position: absolute;
+    left: 0; right: 0;
+    top: 50%;
+    background: #60a5fa;
+    transition: height 0.05s linear;
+  }
+  .side-bar .fill.right { background: #f472b6; }
+  .side-bar .fill-neg.right { background: #f472b6; }
+  .side-bar .val {
+    font-size: 0.7rem;
+    color: #aaa;
+    font-variant-numeric: tabular-nums;
+  }
+  .side-bar .label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #666;
   }
   button {
     background: #1e1e1e;
@@ -147,28 +195,37 @@
     position: absolute;
     inset: 0;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 14px;
     cursor: pointer;
     z-index: 2;
+    background: #1a1a1a;
   }
-  #cam-prompt span {
-    background: #2a2a2a;
-    border: 1px solid #444;
-    padding: 12px 28px;
-    border-radius: 8px;
-    font-size: 1rem;
-    color: #ccc;
-    transition: background 0.2s;
+  #cam-prompt canvas { border-radius: 6px; }
+  #cam-prompt .qr-label {
+    font-size: 0.85rem;
+    color: #aaa;
   }
-  #cam-prompt:hover span {
-    background: #3a3a3a;
+  #cam-prompt .qr-sublabel {
+    font-size: 0.7rem;
+    color: #666;
   }
   #cam-video {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+  #phone-video {
+    position: absolute;
+    top: 0;
+    left: 0;
     width: 100%;
     height: 100%;
     object-fit: cover;
-    transform: scaleX(-1);
   }
   #cam-canvas {
     position: absolute;
@@ -202,15 +259,26 @@
     padding: 8px 18px;
     font-size: 0.85rem;
   }
+  #connect-btn {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 30;
+    font-size: 0.8rem;
+    padding: 6px 14px;
+  }
+
   .input-toggle button.active {
     background: #3b82f6;
     color: #fff;
   }
-
-  body.estopped { border: 6px solid #ef4444; }
   #estop-banner {
     display: none;
-    width: 100%;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 20;
     background: #ef4444;
     color: #fff;
     text-align: center;
@@ -219,25 +287,37 @@
     letter-spacing: 2px;
     padding: 10px 0;
   }
-  body.estopped #estop-banner { display: block; }
+  body.estopped { outline: 6px solid #ef4444; outline-offset: -6px; }
   #estop-enable {
-    display: none;
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    z-index: 30;
+    border: none;
+    padding: 0;
+    border-radius: 0;
+    font-size: 0.85rem;
+    font-weight: normal;
+    cursor: default;
+    pointer-events: none;
+    background: none;
+    color: #e0e0e0;
+  }
+  body.estopped #estop-enable {
     background: #facc15;
     color: #000;
-    font-weight: 700;
-    border: none;
-    padding: 10px 28px;
-    border-radius: 6px;
-    font-size: 0.95rem;
+    border-color: #facc15;
     cursor: pointer;
+    pointer-events: auto;
   }
-  body.estopped #estop-enable { display: inline-block; }
+  body.estopped #estop-banner { display: block; }
 </style>
 </head>
 <body>
+<button id="connect-btn">Connect Serial</button>
 <div id="estop-banner">E-STOPPED</div>
 
-<h1>Robot Tank Drive</h1>
+<h1>K2-B4</h1>
 
 <div id="status-bar">
   <div class="indicator">
@@ -263,20 +343,38 @@
 </div>
 
 <div style="display: flex; gap: 12px; align-items: center;">
-  <button id="connect-btn">Connect Serial</button>
   <div class="input-toggle">
     <button id="mode-gamepad">Gamepad</button>
     <button id="mode-hands" class="active">Hands</button>
   </div>
-  <button id="status-toggle">Status</button>
 </div>
 
-<div id="camera-wrap">
-  <div id="cam-prompt"><span>Enable Camera</span></div>
-  <video id="cam-video" autoplay playsinline></video>
-  <canvas id="cam-canvas"></canvas>
-  <div id="hand-status">Loading model...</div>
+<div id="main-display">
+  <div class="side-bar">
+    <div class="label">Left</div>
+    <div class="bar"><div class="bar-center"></div><div class="fill" id="left-fill"></div><div class="fill-neg" id="left-fill-neg"></div></div>
+    <div class="val" id="left-val">0</div>
+  </div>
+
+  <div id="camera-wrap">
+    <div id="cam-prompt">
+      <canvas id="qr-canvas"></canvas>
+      <div class="qr-label">Scan to connect phone camera</div>
+      <div class="qr-sublabel">or click anywhere to start</div>
+    </div>
+    <video id="phone-video" autoplay playsinline></video>
+    <video id="cam-video" autoplay playsinline></video>
+    <canvas id="cam-canvas"></canvas>
+    <div id="hand-status">Loading model...</div>
+  </div>
+
+  <div class="side-bar">
+    <div class="label">Right</div>
+    <div class="bar"><div class="bar-center"></div><div class="fill right" id="right-fill"></div><div class="fill-neg right" id="right-fill-neg"></div></div>
+    <div class="val" id="right-val">0</div>
+  </div>
 </div>
+
 
 <div id="controls">
   <div class="meter">
@@ -293,7 +391,7 @@
   </div>
 </div>
 
-<button id="estop-enable">⚠ Enable Motors</button>
+<button id="estop-enable">Motors Active</button>
 <div id="log"></div>
 
 <script type="module">
@@ -341,6 +439,7 @@ let handInputs = { left: 0, right: 0, buttons: 0 };
 let lastHandDetect = 0;
 let handsCameraStarted = false;
 
+const phoneVideo = document.getElementById('phone-video');
 const camVideo = document.getElementById('cam-video');
 const camCanvas = document.getElementById('cam-canvas');
 const camCtx = camCanvas.getContext('2d');
@@ -423,8 +522,10 @@ function isClenched(landmarks) {
 }
 
 function drawOverlay(results, steer, throttle, driving) {
-  camCanvas.width = camVideo.videoWidth;
-  camCanvas.height = camVideo.videoHeight;
+  const vw = phoneVideo.videoWidth || camVideo.videoWidth;
+  const vh = phoneVideo.videoHeight || camVideo.videoHeight;
+  camCanvas.width = vw;
+  camCanvas.height = vh;
   const w = camCanvas.width, h = camCanvas.height;
   camCtx.clearRect(0, 0, w, h);
 
@@ -536,7 +637,8 @@ function processHands(results) {
       const lx = h0[9].x, ly = h0[9].y;
       const rx = h1[9].x, ry = h1[9].y;
       const dx = rx - lx, dy = ry - ly;
-      steer = Math.max(-1, Math.min(1, -dy / Math.max(Math.abs(dx), 0.15)));
+      const angle = Math.atan2(-dy, Math.abs(dx));
+      steer = Math.max(-1, Math.min(1, angle / (75 * Math.PI / 180)));
       driving = true;
       statusParts.push('Steer:' + (steer >= 0 ? '+' : '') + Math.round(steer * 100) + '%');
     } else {
@@ -580,20 +682,99 @@ async function initHandTracking() {
   }
 }
 
-async function startCamera() {
-  if (handStream) return;
-  cameraWrap.classList.remove('hidden');
+let signalingWs = null;
+let rtcPc = null;
+let localWebcamStarted = false;
+
+async function startLocalWebcam() {
+  if (localWebcamStarted) return;
+  localWebcamStarted = true;
   try {
     handStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
     camVideo.srcObject = handStream;
-    cameraWrap.classList.add('active');
-    if (!handLandmarker) {
-      await initHandTracking();
-    }
-    runHandLoop();
   } catch (e) {
-    log('Camera error: ' + e.message);
+    log('Local webcam error: ' + e.message);
+    handStatusEl.textContent = 'Webcam failed -- hand tracking unavailable';
   }
+  if (!handLandmarker) {
+    await initHandTracking();
+  }
+}
+
+function connectSignaling() {
+  if (signalingWs && signalingWs.readyState <= 1) return;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  signalingWs = new WebSocket(`${proto}://${location.host}?role=controller`);
+
+  signalingWs.onopen = () => {
+    handStatusEl.textContent = 'Waiting for phone...';
+    signalingWs.send(JSON.stringify({ type: 'request-stream' }));
+  };
+
+  signalingWs.onmessage = async (e) => {
+    const msg = JSON.parse(e.data);
+    log('WS recv: ' + msg.type);
+
+    if (msg.type === 'phone-joined') {
+      handStatusEl.textContent = 'Phone joined, negotiating...';
+      signalingWs.send(JSON.stringify({ type: 'request-stream' }));
+    } else if (msg.type === 'phone-left') {
+      handStatusEl.textContent = 'Phone disconnected';
+      phoneVideo.srcObject = null;
+      cameraWrap.classList.remove('active');
+    } else if (msg.type === 'offer') {
+      if (rtcPc) rtcPc.close();
+      createRtcPc();
+      await rtcPc.setRemoteDescription(msg);
+      const answer = await rtcPc.createAnswer();
+      await rtcPc.setLocalDescription(answer);
+      signalingWs.send(JSON.stringify(rtcPc.localDescription));
+    } else if (msg.type === 'candidate' && rtcPc) {
+      await rtcPc.addIceCandidate(msg.candidate);
+    }
+  };
+
+  signalingWs.onclose = () => {
+    handStatusEl.textContent = 'Signaling disconnected';
+    setTimeout(connectSignaling, 3000);
+  };
+}
+
+function createRtcPc() {
+  rtcPc = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+  });
+
+  rtcPc.onicecandidate = (e) => {
+    if (e.candidate && signalingWs && signalingWs.readyState === 1) {
+      signalingWs.send(JSON.stringify({ type: 'candidate', candidate: e.candidate }));
+    }
+  };
+
+  rtcPc.ontrack = (e) => {
+    log('Got remote track: ' + e.track.kind);
+    let stream;
+    if (e.streams && e.streams[0]) {
+      stream = e.streams[0];
+    } else {
+      stream = new MediaStream();
+      stream.addTrack(e.track);
+    }
+    phoneVideo.srcObject = stream;
+    phoneVideo.play().catch(() => {});
+    cameraWrap.classList.add('active');
+    handStatusEl.textContent = 'Phone camera streaming';
+    startLocalWebcam();
+    runHandLoop();
+  };
+
+  rtcPc.onconnectionstatechange = () => {
+    log('RTC state: ' + rtcPc.connectionState);
+    if (rtcPc.connectionState === 'disconnected' || rtcPc.connectionState === 'failed') {
+      handStatusEl.textContent = 'Phone connection lost';
+      cameraWrap.classList.remove('active');
+    }
+  };
 }
 
 function stopCamera() {
@@ -601,13 +782,44 @@ function stopCamera() {
     handStream.getTracks().forEach(t => t.stop());
     handStream = null;
   }
+  if (rtcPc) { rtcPc.close(); rtcPc = null; }
+  if (signalingWs) { signalingWs.close(); signalingWs = null; }
   camVideo.srcObject = null;
+  phoneVideo.srcObject = null;
   cameraWrap.classList.add('hidden');
   cameraWrap.classList.remove('active');
   handInputs = { left: 0, right: 0, buttons: 0 };
 }
 
-document.getElementById('cam-prompt').onclick = () => startCamera();
+document.getElementById('cam-prompt').onclick = () => {
+  startLocalWebcam();
+  connectSignaling();
+};
+
+// Generate QR code pointing to phone.html on the same server
+(function renderQR() {
+  const phoneUrl = `${location.protocol}//${location.host}/phone.html`;
+  const qr = qrcode(0, 'M');
+  qr.addData(phoneUrl);
+  qr.make();
+  const mods = qr.getModuleCount();
+  const scale = Math.floor(180 / mods);
+  const size = mods * scale;
+  const c = document.getElementById('qr-canvas');
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, size, size);
+  for (let r = 0; r < mods; r++) {
+    for (let col = 0; col < mods; col++) {
+      if (qr.isDark(r, col)) {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(col * scale, r * scale, scale, scale);
+      }
+    }
+  }
+})();
 
 let handLoopRunning = false;
 function runHandLoop() {
@@ -807,11 +1019,7 @@ window.addEventListener('gamepaddisconnected', e => {
   log('Gamepad disconnected');
 });
 
-const statusToggle = document.getElementById('status-toggle');
-const statusBar = document.getElementById('status-bar');
-statusToggle.onclick = () => {
-  statusBar.classList.toggle('open');
-};
+
 
 modeGamepadBtn.onclick = () => {
   inputMode = 'gamepad';
@@ -827,17 +1035,22 @@ modeHandsBtn.onclick = async () => {
   cameraWrap.classList.remove('hidden');
 };
 
+const estopBtn = document.getElementById('estop-enable');
+
 document.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && !e.repeat) {
     e.preventDefault();
     estopped = true;
     document.body.classList.add('estopped');
+    estopBtn.textContent = '⚠ Enable Motors';
   }
 });
 
-document.getElementById('estop-enable').onclick = () => {
+estopBtn.onclick = () => {
+  if (!estopped) return;
   estopped = false;
   document.body.classList.remove('estopped');
+  estopBtn.textContent = 'Motors Active';
 };
 
 tick();
@@ -849,6 +1062,9 @@ tick();
     await connectSerial(ports[0]);
   }
 })();
+
+// Auto-connect signaling so phone stream arrives without clicking
+if (inputMode === 'hands') connectSignaling();
 </script>
 </body>
 </html>

@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Phone Camera</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #0f0f0f;
+    color: #e0e0e0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 16px;
+  }
+  h1 { font-size: 1.2rem; font-weight: 500; }
+  #status {
+    font-size: 0.85rem;
+    color: #888;
+    padding: 4px 12px;
+    border-radius: 4px;
+    background: #1a1a1a;
+  }
+  #status.ok { background: #166534; color: #4ade80; }
+  #status.warn { background: #78350f; color: #fbbf24; }
+  video {
+    width: 90vw;
+    max-width: 640px;
+    border-radius: 8px;
+    border: 1px solid #333;
+    background: #000;
+  }
+  button {
+    background: #1e1e1e;
+    color: #e0e0e0;
+    border: 1px solid #333;
+    padding: 12px 32px;
+    border-radius: 6px;
+    font-size: 1rem;
+    cursor: pointer;
+  }
+  button:active { background: #333; }
+  #cam-switcher {
+    display: flex;
+    gap: 8px;
+  }
+  #cam-switcher button {
+    padding: 8px 16px;
+    font-size: 0.85rem;
+    min-width: 48px;
+  }
+  #cam-switcher button.active {
+    background: #3b82f6;
+    color: #fff;
+    border-color: #3b82f6;
+  }
+  #log {
+    font-size: 0.65rem;
+    color: #666;
+    max-height: 150px;
+    overflow-y: auto;
+    width: 90vw;
+    max-width: 640px;
+    background: #111;
+    padding: 6px;
+    border-radius: 4px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+</style>
+</head>
+<body>
+
+<h1>Robot Camera</h1>
+<div id="status">Tap Start to begin</div>
+<video id="preview" autoplay playsinline muted></video>
+<button id="start-btn">Start Camera</button>
+<div id="cam-switcher"></div>
+<div id="log"></div>
+
+<script>
+const preview = document.getElementById('preview');
+const statusEl = document.getElementById('status');
+const startBtn = document.getElementById('start-btn');
+const logEl = document.getElementById('log');
+
+let ws = null;
+let pc = null;
+let stream = null;
+
+function dbg(msg) {
+  const t = new Date().toLocaleTimeString();
+  logEl.textContent = `[${t}] ${msg}\n` + logEl.textContent;
+  console.log('[phone]', msg);
+}
+
+function setStatus(msg, cls) {
+  statusEl.textContent = msg;
+  statusEl.className = cls || '';
+  dbg('status: ' + msg);
+}
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${proto}://${location.host}?role=phone`;
+  dbg('WS connecting to ' + url);
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    dbg('WS open');
+    setStatus('Connected, waiting for controller...', 'warn');
+  };
+
+  ws.onerror = (e) => dbg('WS error: ' + e.type);
+
+  ws.onmessage = async (e) => {
+    const msg = JSON.parse(e.data);
+    dbg('WS recv: ' + msg.type);
+
+    if (msg.type === 'request-stream') {
+      dbg('Controller requested stream, creating offer...');
+      await startPeerConnection();
+    } else if (msg.type === 'answer') {
+      dbg('Got answer, setting remote description...');
+      await pc.setRemoteDescription(msg);
+      dbg('Remote description set');
+    } else if (msg.type === 'candidate' && pc) {
+      dbg('Adding ICE candidate');
+      await pc.addIceCandidate(msg.candidate);
+    }
+  };
+
+  ws.onclose = (e) => {
+    dbg('WS closed: code=' + e.code + ' reason=' + e.reason);
+    setStatus('Disconnected, reconnecting...', 'warn');
+    setTimeout(connectWS, 2000);
+  };
+}
+
+function createPC() {
+  pc = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+  });
+
+  pc.onicecandidate = (e) => {
+    if (e.candidate) {
+      dbg('ICE candidate: ' + e.candidate.candidate.slice(0, 60));
+      if (ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'candidate', candidate: e.candidate }));
+      }
+    } else {
+      dbg('ICE gathering complete');
+    }
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    dbg('ICE state: ' + pc.iceConnectionState);
+  };
+
+  pc.onconnectionstatechange = () => {
+    dbg('RTC state: ' + pc.connectionState);
+    if (pc.connectionState === 'connected') {
+      setStatus('Streaming to controller', 'ok');
+    } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+      setStatus('Connection lost', 'warn');
+    }
+  };
+
+  pc.onsignalingstatechange = () => {
+    dbg('Signaling state: ' + pc.signalingState);
+  };
+}
+
+async function startPeerConnection() {
+  if (!stream) { dbg('No stream!'); return; }
+  if (pc) pc.close();
+  createPC();
+  stream.getTracks().forEach(t => {
+    dbg('Adding track: ' + t.kind + ' ' + t.id);
+    pc.addTrack(t, stream);
+  });
+  const offer = await pc.createOffer();
+  dbg('Offer created, setting local description...');
+  await pc.setLocalDescription(offer);
+  dbg('Sending offer');
+  ws.send(JSON.stringify(pc.localDescription));
+}
+
+const camSwitcher = document.getElementById('cam-switcher');
+let cameras = [];
+let activeDeviceId = null;
+
+function labelCamera(cam, idx, total) {
+  const l = (cam.label || '').toLowerCase();
+  if (l.includes('ultra') || l.includes('0.5')) return '.5x';
+  if (l.includes('telephoto') || l.includes('2x') || l.includes('3x')) return '2x';
+  if (l.includes('wide') || l.includes('back') || l.includes('rear')) return '1x';
+  if (total <= 1) return '1x';
+  if (idx === 0) return '.5x';
+  if (idx === 1) return '1x';
+  return (idx) + 'x';
+}
+
+async function switchCamera(deviceId) {
+  activeDeviceId = deviceId;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      deviceId: { exact: deviceId },
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    },
+    audio: false
+  });
+  preview.srcObject = stream;
+  dbg('Switched to ' + deviceId.slice(0, 8));
+
+  // Update active button
+  camSwitcher.querySelectorAll('button').forEach(b => {
+    b.classList.toggle('active', b.dataset.id === deviceId);
+  });
+
+  // Replace track in peer connection if active
+  if (pc && pc.connectionState === 'connected') {
+    const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+    if (sender) {
+      await sender.replaceTrack(stream.getVideoTracks()[0]);
+      dbg('Replaced track in peer connection');
+    }
+  }
+}
+
+async function buildCameraSwitcher() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  cameras = devices.filter(d => d.kind === 'videoinput' && d.deviceId);
+  // Filter to back cameras only (skip front-facing)
+  const backCams = cameras.filter(d => {
+    const l = (d.label || '').toLowerCase();
+    return !l.includes('front') && !l.includes('facetime') && !l.includes('user');
+  });
+  const list = backCams.length > 0 ? backCams : cameras;
+  dbg('Found ' + list.length + ' cameras: ' + list.map(c => c.label).join(', '));
+
+  if (list.length <= 1) return;
+  camSwitcher.innerHTML = '';
+  list.forEach((cam, i) => {
+    const btn = document.createElement('button');
+    btn.textContent = labelCamera(cam, i, list.length);
+    btn.dataset.id = cam.deviceId;
+    btn.onclick = () => switchCamera(cam.deviceId);
+    if (cam.deviceId === activeDeviceId) btn.classList.add('active');
+    camSwitcher.appendChild(btn);
+  });
+}
+
+startBtn.onclick = async () => {
+  try {
+    dbg('Requesting camera...');
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      },
+      audio: false
+    });
+    activeDeviceId = stream.getVideoTracks()[0].getSettings().deviceId;
+    dbg('Camera stream: ' + stream.getTracks().map(t => t.kind + ':' + t.readyState).join(', '));
+    preview.srcObject = stream;
+    startBtn.style.display = 'none';
+    await buildCameraSwitcher();
+    setStatus('Camera ready, connecting...', 'warn');
+    connectWS();
+  } catch (e) {
+    setStatus('Camera error: ' + e.message, 'warn');
+  }
+};
+</script>
+</body>
+</html>
