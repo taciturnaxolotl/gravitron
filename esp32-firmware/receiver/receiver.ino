@@ -56,8 +56,12 @@ void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
     frame_ready = true;
 }
 
+#define RXD2 3
+#define TXD2 40
+
 void setup() {
     Serial.begin(115200);
+    Serial1.begin(9600, SERIAL_8N1, RXD2, TXD2);
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
@@ -75,14 +79,14 @@ void loop() {
         uint8_t out[5];
         memcpy(out, (const void*)pending_frame, 5);
         frame_ready = false;
-        Serial.write(out, 5);
-        Serial.flush();
+        Serial1.write(out, 5);
+        Serial1.flush();
 
         // Wait up to 20ms for Arduino ACK
         unsigned long deadline = millis() + 20;
         while (millis() < deadline) {
-            if (Serial.available()) {
-                if (Serial.read() == 0xAC) {
+            if (Serial1.available()) {
+                if (Serial1.read() == 0xAC) {
                     uint8_t ack = 0xAC;
                     uint8_t mac[6];
                     memcpy(mac, (const void*)ack_target, 6);
@@ -92,6 +96,6 @@ void loop() {
             }
         }
         // Drain anything leftover
-        while (Serial.available()) Serial.read();
+        while (Serial1.available()) Serial1.read();
     }
 }

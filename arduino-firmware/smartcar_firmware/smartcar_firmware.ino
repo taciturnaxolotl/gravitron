@@ -53,7 +53,7 @@ static void tank_drive(int8_t left, int8_t right) {
 static unsigned long last_packet_ms = 0;
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
 
   pinMode(PIN_PWMA, OUTPUT);
   pinMode(PIN_PWMB, OUTPUT);
