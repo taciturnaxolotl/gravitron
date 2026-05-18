@@ -133,15 +133,37 @@
   }
 
   #camera-wrap {
-    display: none;
     position: relative;
     width: min(90vw, 640px);
     aspect-ratio: 4/3;
     border-radius: 8px;
     overflow: hidden;
     border: 1px solid #333;
+    background: #1a1a1a;
   }
-  #camera-wrap.active { display: block; }
+  #camera-wrap.hidden { display: none; }
+  #camera-wrap.active #cam-prompt { display: none; }
+  #cam-prompt {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 2;
+  }
+  #cam-prompt span {
+    background: #2a2a2a;
+    border: 1px solid #444;
+    padding: 12px 28px;
+    border-radius: 8px;
+    font-size: 1rem;
+    color: #ccc;
+    transition: background 0.2s;
+  }
+  #cam-prompt:hover span {
+    background: #3a3a3a;
+  }
   #cam-video {
     width: 100%;
     height: 100%;
@@ -184,9 +206,36 @@
     background: #3b82f6;
     color: #fff;
   }
+
+  body.estopped { border: 6px solid #ef4444; }
+  #estop-banner {
+    display: none;
+    width: 100%;
+    background: #ef4444;
+    color: #fff;
+    text-align: center;
+    font-weight: 700;
+    font-size: 1.3rem;
+    letter-spacing: 2px;
+    padding: 10px 0;
+  }
+  body.estopped #estop-banner { display: block; }
+  #estop-enable {
+    display: none;
+    background: #facc15;
+    color: #000;
+    font-weight: 700;
+    border: none;
+    padding: 10px 28px;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  body.estopped #estop-enable { display: inline-block; }
 </style>
 </head>
 <body>
+<div id="estop-banner">E-STOPPED</div>
 
 <h1>Robot Tank Drive</h1>
 
@@ -223,6 +272,7 @@
 </div>
 
 <div id="camera-wrap">
+  <div id="cam-prompt"><span>Enable Camera</span></div>
   <video id="cam-video" autoplay playsinline></video>
   <canvas id="cam-canvas"></canvas>
   <div id="hand-status">Loading model...</div>
@@ -243,6 +293,7 @@
   </div>
 </div>
 
+<button id="estop-enable">⚠ Enable Motors</button>
 <div id="log"></div>
 
 <script type="module">
@@ -283,6 +334,7 @@ let smoothRadio = 0;
 const ALPHA = 0.15;
 
 let inputMode = 'hands'; // 'gamepad' | 'hands'
+let estopped = false;
 let handLandmarker = null;
 let handStream = null;
 let handInputs = { left: 0, right: 0, buttons: 0 };
@@ -530,6 +582,7 @@ async function initHandTracking() {
 
 async function startCamera() {
   if (handStream) return;
+  cameraWrap.classList.remove('hidden');
   try {
     handStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
     camVideo.srcObject = handStream;
@@ -549,9 +602,12 @@ function stopCamera() {
     handStream = null;
   }
   camVideo.srcObject = null;
+  cameraWrap.classList.add('hidden');
   cameraWrap.classList.remove('active');
   handInputs = { left: 0, right: 0, buttons: 0 };
 }
+
+document.getElementById('cam-prompt').onclick = () => startCamera();
 
 let handLoopRunning = false;
 function runHandLoop() {
@@ -637,6 +693,10 @@ async function tick() {
       setDot(gamepadDot, 'on');
       gamepadLabel.textContent = gp.id.slice(0, 30);
     }
+  }
+
+  if (estopped && inputs) {
+    inputs = { left: 0, right: 0, buttons: 0 };
   }
 
   if (inputs) {
@@ -764,7 +824,20 @@ modeHandsBtn.onclick = async () => {
   inputMode = 'hands';
   modeHandsBtn.classList.add('active');
   modeGamepadBtn.classList.remove('active');
-  await startCamera();
+  cameraWrap.classList.remove('hidden');
+};
+
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !e.repeat) {
+    e.preventDefault();
+    estopped = true;
+    document.body.classList.add('estopped');
+  }
+});
+
+document.getElementById('estop-enable').onclick = () => {
+  estopped = false;
+  document.body.classList.remove('estopped');
 };
 
 tick();
