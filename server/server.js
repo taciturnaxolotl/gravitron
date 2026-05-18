@@ -7,7 +7,27 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
+const AUTH_TOKEN = process.env.AUTH_TOKEN || 'swordfish';
+let authorized = false;
+
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+app.post('/authorize', (req, res) => {
+  if (req.body.token === AUTH_TOKEN) {
+    authorized = true;
+    console.log('Authorized');
+    return res.json({ ok: true });
+  }
+  res.status(401).json({ ok: false });
+});
+
+app.get('/', (req, res) => {
+  if (!authorized) {
+    return res.sendFile(path.join(__dirname, 'public', 'unauthorized.html'));
+  }
+  res.redirect('/controller');
+});
 
 app.get('/controller', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'esp32-firmware', 'controller.html'));
