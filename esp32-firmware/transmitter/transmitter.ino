@@ -9,8 +9,8 @@ struct __attribute__((packed)) DrivePacket {
     uint8_t buttons;
 };
 
-// E0:72:A1:6F:FC:FC
-static uint8_t peer_mac[] = {0xE0, 0x72, 0xA1, 0x6F, 0xFC, 0xFC};
+// 30:ed:a0:17:19:fc
+static uint8_t peer_mac[] = {0x30, 0xED, 0xA0, 0x17, 0x19, 0xFC};
 
 uint8_t crc8(const uint8_t* data, size_t len) {
     uint8_t crc = 0;

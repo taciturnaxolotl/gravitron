@@ -12,9 +12,10 @@ struct __attribute__((packed)) DrivePacket {
 static uint8_t sender_mac[6];
 static bool have_peer = false;
 
-static bool waiting_ack = false;
-static uint8_t ack_target[6];
-static unsigned long ack_deadline = 0;
+static volatile uint8_t ack_target[6];
+
+static volatile uint8_t pending_frame[5];
+static volatile bool frame_ready = false;
 
 uint8_t crc8(const uint8_t* data, size_t len) {
     uint8_t crc = 0;
@@ -45,24 +46,18 @@ void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
         have_peer = true;
     }
 
-    DrivePacket pkt;
-    memcpy(&pkt, data, sizeof(pkt));
-
-    // Forward to Arduino over serial
-    uint8_t frame[5];
-    frame[0] = 0xAB;
-    memcpy(&frame[1], data, sizeof(DrivePacket));
-    frame[4] = crc8(data, sizeof(DrivePacket));
-    Serial1.write(frame, sizeof(frame));
-
-    // Defer ACK to loop() — never block in ESP-NOW callback
-    memcpy(ack_target, smac, 6);
-    ack_deadline = millis() + 20;
-    waiting_ack = true;
+    // Buffer frame for loop(); Serial.write() not safe in ESP-NOW callback
+    uint8_t tmp[5];
+    tmp[0] = 0xAB;
+    memcpy(&tmp[1], data, sizeof(DrivePacket));
+    tmp[4] = crc8(data, sizeof(DrivePacket));
+    memcpy((void*)pending_frame, tmp, 5);
+    memcpy((void*)ack_target, smac, 6);
+    frame_ready = true;
 }
 
 void setup() {
-    Serial1.begin(115200, SERIAL_8N1, 4, 3);
+    Serial.begin(115200);
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
@@ -75,13 +70,28 @@ void setup() {
 }
 
 void loop() {
-    if (waiting_ack && millis() < ack_deadline && Serial1.available() >= 1) {
-        if (Serial1.read() == 0xAC) {
-            uint8_t ack = 0xAC;
-            esp_now_send(ack_target, &ack, 1);
+    // Flush pending serial frame (deferred from ESP-NOW callback)
+    if (frame_ready) {
+        uint8_t out[5];
+        memcpy(out, (const void*)pending_frame, 5);
+        frame_ready = false;
+        Serial.write(out, 5);
+        Serial.flush();
+
+        // Wait up to 20ms for Arduino ACK
+        unsigned long deadline = millis() + 20;
+        while (millis() < deadline) {
+            if (Serial.available()) {
+                if (Serial.read() == 0xAC) {
+                    uint8_t ack = 0xAC;
+                    uint8_t mac[6];
+                    memcpy(mac, (const void*)ack_target, 6);
+                    esp_now_send(mac, &ack, 1);
+                }
+                break;
+            }
         }
-        waiting_ack = false;
-    } else if (waiting_ack && millis() >= ack_deadline) {
-        waiting_ack = false;
+        // Drain anything leftover
+        while (Serial.available()) Serial.read();
     }
 }

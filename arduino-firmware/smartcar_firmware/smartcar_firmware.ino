@@ -37,16 +37,14 @@ static void motor_write(bool dir, uint8_t speed, uint8_t pin_pwm, uint8_t pin_di
 }
 
 static void tank_drive(int8_t left, int8_t right) {
-  digitalWrite(PIN_STBY, HIGH);
-
   bool dirL, dirR;
   uint8_t spdL, spdR;
 
-  if (left >= 0)  { dirL = HIGH; spdL = left * 2; }
-  else            { dirL = LOW;  spdL = -left * 2; }
+  if (left >= 0)  { dirL = HIGH; spdL = min((int16_t)left * 2, 255); }
+  else            { dirL = LOW;  spdL = min((int16_t)-left * 2, 255); }
 
-  if (right >= 0) { dirR = HIGH; spdR = right * 2; }
-  else            { dirR = LOW;  spdR = -right * 2; }
+  if (right >= 0) { dirR = HIGH; spdR = min((int16_t)right * 2, 255); }
+  else            { dirR = LOW;  spdR = min((int16_t)-right * 2, 255); }
 
   motor_write(dirL, spdL, PIN_PWMB, PIN_BIN1);
   motor_write(dirR, spdR, PIN_PWMA, PIN_AIN1);
@@ -66,26 +64,29 @@ void setup() {
 }
 
 void loop() {
+    // Always read serial regardless of watchdog state
+    while (Serial.available() && Serial.peek() != 0xAB) Serial.read();
+
+    if (Serial.available() >= 5) {
+        Serial.read(); // consume 0xAB
+        int8_t left     = Serial.read();
+        int8_t right    = Serial.read();
+        uint8_t buttons = Serial.read();
+        uint8_t crc_rcvd = Serial.read();
+
+        uint8_t payload[3] = {(uint8_t)left, (uint8_t)right, buttons};
+        if (crc8(payload, 3) == crc_rcvd) {
+            tank_drive(left, right);
+            Serial.write((uint8_t)0xAC);
+            last_packet_ms = millis();
+        }
+    }
+
+    // Manage STBY once per iteration based on timeout
     if (millis() - last_packet_ms > 300) {
         tank_drive(0, 0);
         digitalWrite(PIN_STBY, LOW);
-    }
-
-    // Discard any leading garbage bytes
-    while (Serial.available() && Serial.peek() != 0xAB) Serial.read();
-
-    if (Serial.available() < 5) return; // wait for full frame
-
-    Serial.read(); // consume 0xAB
-    int8_t left     = Serial.read();
-    int8_t right    = Serial.read();
-    uint8_t buttons = Serial.read();
-    uint8_t crc_rcvd = Serial.read();
-
-    uint8_t payload[3] = {(uint8_t)left, (uint8_t)right, buttons};
-    if (crc8(payload, 3) == crc_rcvd) {
-        tank_drive(left, right);
-        Serial.write((uint8_t)0xAC);
-        last_packet_ms = millis();
+    } else {
+        digitalWrite(PIN_STBY, HIGH);
     }
 }
