@@ -4,7 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Tank Drive Controller</title>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs" type="module"></script>
+<script type="importmap">
+{
+  "imports": {
+    "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs"
+  }
+}
+</script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -129,8 +135,8 @@
   #camera-wrap {
     display: none;
     position: relative;
-    width: 320px;
-    height: 240px;
+    width: min(90vw, 640px);
+    aspect-ratio: 4/3;
     border-radius: 8px;
     overflow: hidden;
     border: 1px solid #333;
@@ -211,8 +217,8 @@
 <div style="display: flex; gap: 12px; align-items: center;">
   <button id="connect-btn">Connect Serial</button>
   <div class="input-toggle">
-    <button id="mode-gamepad" class="active">Gamepad</button>
-    <button id="mode-hands">Hands</button>
+    <button id="mode-gamepad">Gamepad</button>
+    <button id="mode-hands" class="active">Hands</button>
   </div>
   <button id="status-toggle">Status</button>
 </div>
@@ -241,7 +247,7 @@
 <div id="log"></div>
 
 <script type="module">
-import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs";
+import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 
 const DZ = 0.08;
 const RATE_HZ = 20;
@@ -277,11 +283,12 @@ let smoothAck = 0;
 let smoothRadio = 0;
 const ALPHA = 0.15;
 
-let inputMode = 'gamepad'; // 'gamepad' | 'hands'
+let inputMode = 'hands'; // 'gamepad' | 'hands'
 let handLandmarker = null;
 let handStream = null;
 let handInputs = { left: 0, right: 0, buttons: 0 };
 let lastHandDetect = 0;
+let handsCameraStarted = false;
 
 const camVideo = document.getElementById('cam-video');
 const camCanvas = document.getElementById('cam-canvas');
@@ -349,35 +356,26 @@ function deadzone(v) {
   return Math.abs(v) < DZ ? 0 : v;
 }
 
-const PINCH_CLOSE = 0.04;
-const PINCH_OPEN = 0.14;
+let heldThrottle = 0;
+let lastSteer = 0;
 
-function pinchToThrottle(landmarks) {
+function isClenched(landmarks) {
   const thumb = landmarks[4];
   const index = landmarks[8];
   const dx = thumb.x - index.x;
   const dy = thumb.y - index.y;
   const dz = thumb.z - index.z;
   const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-  return Math.max(0, Math.min(1, (dist - PINCH_CLOSE) / (PINCH_OPEN - PINCH_CLOSE)));
+  return dist < 0.07;
 }
 
-function wheelAngle(leftHand, rightHand) {
-  const lCenter = leftHand[9];
-  const rCenter = rightHand[9];
-  const dy = rCenter.y - lCenter.y;
-  const dx = rCenter.x - lCenter.x;
-  return Math.max(-1, Math.min(1, dy / Math.max(Math.abs(dx), 0.15)));
-}
-
-function drawLandmarks(results, steer) {
+function drawLandmarks(results, steer, throttle) {
   camCanvas.width = camVideo.videoWidth;
   camCanvas.height = camVideo.videoHeight;
   const w = camCanvas.width, h = camCanvas.height;
   camCtx.clearRect(0, 0, w, h);
 
   if (!results.landmarks) return;
-  let centers = [];
   for (const hand of results.landmarks) {
     camCtx.fillStyle = '#4ade80';
     for (const pt of hand) {
@@ -385,25 +383,39 @@ function drawLandmarks(results, steer) {
       camCtx.arc(pt.x * w, pt.y * h, 3, 0, 2 * Math.PI);
       camCtx.fill();
     }
-    const t4 = hand[4], t8 = hand[8];
-    camCtx.strokeStyle = '#f472b6';
-    camCtx.lineWidth = 2;
-    camCtx.beginPath();
-    camCtx.moveTo(t4.x * w, t4.y * h);
-    camCtx.lineTo(t8.x * w, t8.y * h);
-    camCtx.stroke();
-    centers.push({ x: hand[9].x * w, y: hand[9].y * h });
   }
-  if (centers.length === 2) {
-    camCtx.strokeStyle = '#facc15';
-    camCtx.lineWidth = 3;
-    camCtx.setLineDash([8, 6]);
-    camCtx.beginPath();
-    camCtx.moveTo(centers[0].x, centers[0].y);
-    camCtx.lineTo(centers[1].x, centers[1].y);
-    camCtx.stroke();
-    camCtx.setLineDash([]);
-  }
+
+  // Steer indicator — vertical line at left hand x
+  const steerX = ((steer + 1) / 2) * w;
+  camCtx.strokeStyle = '#facc15';
+  camCtx.lineWidth = 3;
+  camCtx.setLineDash([8, 6]);
+  camCtx.beginPath();
+  camCtx.moveTo(steerX, 0);
+  camCtx.lineTo(steerX, h);
+  camCtx.stroke();
+  camCtx.setLineDash([]);
+
+  camCtx.fillStyle = '#facc15';
+  camCtx.font = 'bold 16px monospace';
+  camCtx.textAlign = 'center';
+  camCtx.fillText('STEER', steerX, 20);
+
+  // Throttle bar — right side (canvas is mirrored, so draw left)
+  const barX = 10;
+  const barW = 14;
+  const barH = h - 40;
+  const barY = 20;
+  const fillH = throttle * barH;
+  camCtx.strokeStyle = '#555';
+  camCtx.lineWidth = 2;
+  camCtx.strokeRect(barX, barY, barW, barH);
+  camCtx.fillStyle = '#4ade80';
+  camCtx.fillRect(barX, barY + barH - fillH, barW, fillH);
+  camCtx.fillStyle = '#4ade80';
+  camCtx.font = 'bold 14px monospace';
+  camCtx.textAlign = 'left';
+  camCtx.fillText(Math.round(throttle * 100) + '%', barX, barY - 6);
 }
 
 function processHands(results) {
@@ -415,34 +427,45 @@ function processHands(results) {
       if (label === 'Left'  && !leftHand)  leftHand  = results.landmarks[i];
       if (label === 'Right' && !rightHand) rightHand = results.landmarks[i];
     }
+    // Fallback if handedness missing: leftmost = left, rightmost = right
+    if (!leftHand || !rightHand) {
+      for (const lm of results.landmarks) {
+        const side = lm[9].x < 0.5 ? 'left' : 'right';
+        if (side === 'left'  && !leftHand)  leftHand = lm;
+        if (side === 'right' && !rightHand) rightHand = lm;
+      }
+    }
   }
 
-  let throttle = 0, steer = 0;
+  let throttle = heldThrottle;
+  let steer = 0;
   let left = 0, right = 0;
   const statusParts = [];
 
-  if (leftHand && rightHand) {
-    steer = wheelAngle(leftHand, rightHand);
-    const avgY = (leftHand[0].y + rightHand[0].y) / 2;
-    const t = Math.max(0, Math.min(1, 1 - avgY / 0.8));
-    throttle = Math.exp(-6 * (1 - t * t));
-
-    left  = Math.max(-1, Math.min(1, throttle * (1 + steer)));
-    right = Math.max(-1, Math.min(1, throttle * (1 - steer)));
-
-    const deg = Math.round(steer * 45);
-    statusParts.push('Throttle:' + Math.round(throttle * 100) + '%');
-    statusParts.push('Steer:' + (deg >= 0 ? '+' : '') + deg + '°');
-  } else if (leftHand || rightHand) {
-    const hand = leftHand || rightHand;
-    const t = Math.max(0, Math.min(1, 1 - hand[0].y / 0.8));
-    throttle = Math.exp(-6 * (1 - t * t));
-    left = throttle;
-    right = throttle;
-    statusParts.push('1 hand — straight ' + Math.round(throttle * 100) + '%');
+  if (leftHand) {
+    steer = Math.max(-1, Math.min(1, (leftHand[9].x - 0.5) * 4));
+    lastSteer = steer;
+    statusParts.push('Steer:' + (steer >= 0 ? '+' : '') + Math.round(steer * 100) + '%');
+  } else {
+    steer = lastSteer;
   }
 
-  drawLandmarks(results, steer);
+  if (rightHand) {
+    if (isClenched(rightHand)) {
+      throttle = Math.max(0, Math.min(1, 1 - rightHand[0].y / 0.9));
+      heldThrottle = throttle;
+      statusParts.push('Throttle:' + Math.round(throttle * 100) + '% (held)');
+    } else {
+      statusParts.push('Throttle:' + Math.round(throttle * 100) + '%');
+    }
+  }
+
+  if (leftHand || rightHand) {
+    left  = Math.max(-1, Math.min(1, throttle * (1 + steer)));
+    right = Math.max(-1, Math.min(1, throttle * (1 - steer)));
+  }
+
+  drawLandmarks(results, steer, throttle);
 
   handInputs = { left, right, buttons: 0 };
   lastHandDetect = Date.now();
