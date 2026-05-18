@@ -484,7 +484,7 @@ function processHands(results) {
       const lx = h0[9].x, ly = h0[9].y;
       const rx = h1[9].x, ry = h1[9].y;
       const dx = rx - lx, dy = ry - ly;
-      steer = Math.max(-1, Math.min(1, dy / Math.max(Math.abs(dx), 0.15)));
+      steer = Math.max(-1, Math.min(1, -dy / Math.max(Math.abs(dx), 0.15)));
       driving = true;
       statusParts.push('Steer:' + (steer >= 0 ? '+' : '') + Math.round(steer * 100) + '%');
     } else {
