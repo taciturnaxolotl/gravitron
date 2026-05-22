@@ -2,7 +2,8 @@
   "name": "robot-camera-server",
   "private": true,
   "scripts": {
-    "start": "node server.js"
+    "dev": "bun --watch server.js",
+    "start": "bun server.js"
   },
   "dependencies": {
     "express": "^4.21.0",

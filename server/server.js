@@ -27,7 +27,7 @@ app.get("/", (req, res) => {
 });
 
 app.get("/controller", (req, res) => {
-	res.sendFile(path.join(__dirname, "..", "esp32-firmware", "controller.html"));
+	res.sendFile(path.join(__dirname, "public", "controller.html"));
 });
 
 let phone = null;

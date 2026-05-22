@@ -631,13 +631,16 @@ function processHands(results) {
   // Steer: both hands in steer zone, both clenched
   driving = false;
   if (steerHands.length >= 2) {
+    // Sort by x so h0 is always the camera-left hand and h1 is camera-right
+    // (lower x = further left in camera space)
+    steerHands.sort((a, b) => a[9].x - b[9].x);
     const h0 = steerHands[0], h1 = steerHands[1];
     const bothClenched = isClenched(h0) && isClenched(h1);
     if (bothClenched) {
       const lx = h0[9].x, ly = h0[9].y;
       const rx = h1[9].x, ry = h1[9].y;
       const dx = rx - lx, dy = ry - ly;
-      const angle = Math.atan2(-dy, Math.abs(dx));
+      const angle = Math.atan2(-dy, dx);
       steer = Math.max(-1, Math.min(1, angle / (75 * Math.PI / 180)));
       driving = true;
       statusParts.push('Steer:' + (steer >= 0 ? '+' : '') + Math.round(steer * 100) + '%');
