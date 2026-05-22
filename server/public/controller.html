@@ -552,13 +552,33 @@ function drawOverlay(results, steer, throttle, driving) {
   camCtx.fillText('THROTTLE', (zoneXpx + w) / 2, h - 8);
   camCtx.fillText('STEER', zoneXpx / 2, h - 8);
 
-  // Draw hand landmarks
+  // Draw hand landmarks with skeleton
+  const HAND_CONNECTIONS = [
+    [0,1],[1,2],[2,3],[3,4],       // thumb
+    [0,5],[5,6],[6,7],[7,8],       // index
+    [0,9],[9,10],[10,11],[11,12],  // middle
+    [0,13],[13,14],[14,15],[15,16],// ring
+    [0,17],[17,18],[18,19],[19,20],// pinky
+    [5,9],[9,13],[13,17],          // palm knuckles
+  ];
   if (results.landmarks) {
     for (const hand of results.landmarks) {
-      camCtx.fillStyle = '#4ade80';
-      for (const pt of hand) {
+      // Bones
+      camCtx.strokeStyle = 'rgba(74,222,128,0.5)';
+      camCtx.lineWidth = 1.5;
+      for (const [a, b] of HAND_CONNECTIONS) {
         camCtx.beginPath();
-        camCtx.arc(mx(pt.x), pt.y * h, 3, 0, 2 * Math.PI);
+        camCtx.moveTo(mx(hand[a].x), hand[a].y * h);
+        camCtx.lineTo(mx(hand[b].x), hand[b].y * h);
+        camCtx.stroke();
+      }
+      // Joints
+      for (let i = 0; i < hand.length; i++) {
+        const pt = hand[i];
+        const isTip = [4,8,12,16,20].includes(i);
+        camCtx.beginPath();
+        camCtx.arc(mx(pt.x), pt.y * h, isTip ? 5 : 3, 0, 2 * Math.PI);
+        camCtx.fillStyle = isTip ? '#facc15' : '#4ade80';
         camCtx.fill();
       }
     }
@@ -656,8 +676,9 @@ function processHands(results) {
   // Steer is independent of throttle so a full hard turn always spins motors
   // opposite each other; throttle scales the overall magnitude.
   if (driving) {
-    left  = Math.max(-1, Math.min(1, storedThrottle - steer * 2));
-    right = Math.max(-1, Math.min(1, storedThrottle + steer * 2));
+    const steerExp = Math.sign(steer) * Math.pow(Math.abs(steer), 1.7);
+    left  = Math.max(-1, Math.min(1, storedThrottle + steerExp * 2));
+    right = Math.max(-1, Math.min(1, storedThrottle - steerExp * 2));
   }
 
   drawOverlay(results, steer, storedThrottle, driving);
