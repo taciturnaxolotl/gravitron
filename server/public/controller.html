@@ -652,10 +652,12 @@ function processHands(results) {
     statusParts.push('Need 2 hands to steer');
   }
 
-  // Apply motor output only when driving
-  if (driving && storedThrottle > 0) {
-    left  = Math.max(-1, Math.min(1, storedThrottle * (1 + steer)));
-    right = Math.max(-1, Math.min(1, storedThrottle * (1 - steer)));
+  // Apply motor output only when driving.
+  // Steer is independent of throttle so a full hard turn always spins motors
+  // opposite each other; throttle scales the overall magnitude.
+  if (driving) {
+    left  = Math.max(-1, Math.min(1, storedThrottle - steer * 2));
+    right = Math.max(-1, Math.min(1, storedThrottle + steer * 2));
   }
 
   drawOverlay(results, steer, storedThrottle, driving);
