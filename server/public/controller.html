@@ -622,7 +622,8 @@ function processHands(results) {
 
   // Throttle: pinch in left zone sets value, persists on release
   if (throttleHand && isClenched(throttleHand)) {
-    storedThrottle = Math.max(0, Math.min(1, 1 - throttleHand[0].y / 0.9));
+    const pinchY = (throttleHand[4].y + throttleHand[8].y) / 2;
+    storedThrottle = Math.max(0, Math.min(1, 1 - pinchY / 0.9));
     statusParts.push('Throttle:' + Math.round(storedThrottle * 100) + '%');
   } else if (throttleHand) {
     statusParts.push('Throttle:' + Math.round(storedThrottle * 100) + '% (set)');
