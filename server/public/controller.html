@@ -8,7 +8,8 @@
 <script type="importmap">
 {
   "imports": {
-    "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs"
+    "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs",
+    "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.min.js"
   }
 }
 </script>
@@ -363,9 +364,11 @@
       <canvas id="qr-canvas"></canvas>
       <div class="qr-label">Scan to connect phone camera</div>
       <div class="qr-sublabel">or click anywhere to start</div>
+      <button id="demo-btn" style="margin-top:8px;">Demo Mode</button>
     </div>
     <video id="phone-video" autoplay playsinline></video>
     <video id="cam-video" autoplay playsinline></video>
+    <canvas id="demo-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;display:none;"></canvas>
     <canvas id="cam-canvas"></canvas>
     <div id="hand-status">Loading model...</div>
   </div>
@@ -398,6 +401,7 @@
 
 <script type="module">
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
+import * as THREE from "three";
 
 const DZ = 0.08;
 const RATE_HZ = 20;
@@ -769,6 +773,7 @@ function connectSignaling() {
       handStatusEl.textContent = 'Phone disconnected';
       phoneVideo.srcObject = null;
       cameraWrap.classList.remove('active');
+      if (inputMode === 'hands') startDemo();
     } else if (msg.type === 'offer') {
       if (rtcPc) rtcPc.close();
       createRtcPc();
@@ -811,6 +816,7 @@ function createRtcPc() {
     phoneVideo.play().catch(() => {});
     cameraWrap.classList.add('active');
     handStatusEl.textContent = 'Phone camera streaming';
+    stopDemo();
     startLocalWebcam();
     runHandLoop();
   };
@@ -841,6 +847,11 @@ function stopCamera() {
 document.getElementById('cam-prompt').onclick = () => {
   startLocalWebcam();
   connectSignaling();
+};
+
+document.getElementById('demo-btn').onclick = (e) => {
+  e.stopPropagation();
+  startDemo();
 };
 
 // Generate QR code pointing to phone.html on the same server
@@ -931,6 +942,156 @@ function updateBars(leftFloat, rightFloat) {
 
   leftVal.textContent  = Math.round(l * 127);
   rightVal.textContent = Math.round(r * 127);
+}
+
+// --- Demo mode (first-person Three.js sim) ---
+const demoCanvas = document.getElementById('demo-canvas');
+let demoActive = false;
+let demoRenderer = null, demoScene = null, demoCamera = null;
+let demoRobotYaw = 0, demoRobotX = 0, demoRobotZ = 0;
+let demoAnimId = null;
+let demoColliders = [];
+
+function initDemo() {
+  if (demoRenderer) return;
+
+  const wrap = document.getElementById('camera-wrap');
+  const W = wrap.clientWidth  || 640;
+  const H = wrap.clientHeight || 480;
+
+  demoRenderer = new THREE.WebGLRenderer({ canvas: demoCanvas, antialias: true });
+  demoRenderer.setSize(W, H);
+  demoRenderer.shadowMap.enabled = true;
+
+  demoScene = new THREE.Scene();
+  demoScene.background = new THREE.Color(0x111111);
+  demoScene.fog = new THREE.Fog(0x111111, 8, 30);
+
+  // Camera (first person, mounted at ~30cm height)
+  demoCamera = new THREE.PerspectiveCamera(75, W / H, 0.05, 100);
+  demoCamera.position.set(0, 0.3, 0);
+
+  // Lighting
+  demoScene.add(new THREE.AmbientLight(0xffffff, 0.4));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+  sun.position.set(5, 10, 5);
+  sun.castShadow = true;
+  demoScene.add(sun);
+
+  // Floor — grid of tiles
+  const floorGeo = new THREE.PlaneGeometry(40, 40, 20, 20);
+  const floorMat = new THREE.MeshLambertMaterial({ color: 0x1a1a2e, wireframe: false });
+  const floor = new THREE.Mesh(floorGeo, floorMat);
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  demoScene.add(floor);
+
+  // Grid lines on floor
+  const grid = new THREE.GridHelper(40, 40, 0x333366, 0x222244);
+  grid.position.y = 0.001;
+  demoScene.add(grid);
+
+  // Collidable boxes: {cx, cz, hw, hd} (half-width, half-depth in XZ)
+  demoColliders = [];
+
+  // Boundary walls
+  const wallMat = new THREE.MeshLambertMaterial({ color: 0x334455 });
+  const wallH = 1.5, wallT = 0.3, wallL = 40;
+  const wallDefs = [
+    { pos: [0, wallH/2,  20], size: [wallL, wallH, wallT] },
+    { pos: [0, wallH/2, -20], size: [wallL, wallH, wallT] },
+    { pos: [ 20, wallH/2, 0], size: [wallT, wallH, wallL] },
+    { pos: [-20, wallH/2, 0], size: [wallT, wallH, wallL] },
+  ];
+  for (const w of wallDefs) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(...w.size), wallMat);
+    m.position.set(...w.pos);
+    m.castShadow = true; m.receiveShadow = true;
+    demoScene.add(m);
+    demoColliders.push({ cx: w.pos[0], cz: w.pos[2], hw: w.size[0]/2, hd: w.size[2]/2 });
+  }
+
+  // Random obstacles
+  const obsMat = new THREE.MeshLambertMaterial({ color: 0x446655 });
+  const rng = (a, b) => a + Math.random() * (b - a);
+  for (let i = 0; i < 20; i++) {
+    const sw = rng(0.4, 1.2), sd = rng(0.4, 1.2), h = rng(0.3, 1.5);
+    const obs = new THREE.Mesh(new THREE.BoxGeometry(sw, h, sd), obsMat);
+    let ox, oz;
+    do { ox = rng(-18, 18); oz = rng(-18, 18); } while (Math.abs(ox) < 2 && Math.abs(oz) < 2);
+    obs.position.set(ox, h/2, oz);
+    obs.castShadow = true; obs.receiveShadow = true;
+    demoScene.add(obs);
+    demoColliders.push({ cx: ox, cz: oz, hw: sw/2, hd: sd/2 });
+  }
+
+  // Resize observer
+  new ResizeObserver(() => {
+    const W2 = wrap.clientWidth, H2 = wrap.clientHeight;
+    demoRenderer.setSize(W2, H2);
+    demoCamera.aspect = W2 / H2;
+    demoCamera.updateProjectionMatrix();
+  }).observe(wrap);
+}
+
+function startDemo() {
+  if (demoActive) return;
+  initDemo();
+  demoActive = true;
+  demoCanvas.style.display = 'block';
+  cameraWrap.classList.add('active');
+  demoRobotX = 0; demoRobotZ = 0; demoRobotYaw = 0;
+  demoCamera.position.set(0, 0.3, 0);
+
+  let last = performance.now();
+  function loop(now) {
+    if (!demoActive) return;
+    const dt = Math.min((now - last) / 1000, 0.05);
+    last = now;
+
+    // Tank drive kinematics from handInputs
+    const L = handInputs.left, R = handInputs.right;
+    const linearV  = (L + R) / 2 * 3;    // m/s
+    const angularV = (R - L) / 2 * 3;    // rad/s (positive = turn right)
+
+    demoRobotYaw += angularV * dt;
+    demoCamera.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), demoRobotYaw);
+
+    // Forward vector from camera orientation
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(demoCamera.quaternion);
+
+    const radius = 0.25; // robot collision radius
+    const nx = demoRobotX + fwd.x * linearV * dt;
+    const nz = demoRobotZ + fwd.z * linearV * dt;
+
+    // AABB collision: try X and Z separately so we can slide along walls
+    let tx = nx, tz = demoRobotZ;
+    let collX = false;
+    for (const c of demoColliders) {
+      if (Math.abs(tx - c.cx) < c.hw + radius && Math.abs(tz - c.cz) < c.hd + radius) { collX = true; break; }
+    }
+    if (collX) tx = demoRobotX;
+
+    let collZ = false;
+    for (const c of demoColliders) {
+      if (Math.abs(tx - c.cx) < c.hw + radius && Math.abs(nz - c.cz) < c.hd + radius) { collZ = true; break; }
+    }
+    demoRobotX = tx;
+    demoRobotZ = collZ ? demoRobotZ : nz;
+
+    demoCamera.position.set(demoRobotX, 0.3, demoRobotZ);
+
+    demoRenderer.render(demoScene, demoCamera);
+    demoAnimId = requestAnimationFrame(loop);
+  }
+  demoAnimId = requestAnimationFrame(loop);
+}
+
+function stopDemo() {
+  demoActive = false;
+  demoCanvas.style.display = 'none';
+  if (!phoneVideo.srcObject) cameraWrap.classList.remove('active');
+  if (demoAnimId) { cancelAnimationFrame(demoAnimId); demoAnimId = null; }
 }
 
 async function tick() {
@@ -1072,6 +1233,7 @@ modeGamepadBtn.onclick = () => {
   inputMode = 'gamepad';
   modeGamepadBtn.classList.add('active');
   modeHandsBtn.classList.remove('active');
+  stopDemo();
 };
 
 modeHandsBtn.onclick = async () => {
@@ -1081,6 +1243,8 @@ modeHandsBtn.onclick = async () => {
   cameraWrap.classList.remove('hidden');
   await startLocalWebcam();
   runHandLoop();
+  // Start demo if no phone is streaming
+  if (!phoneVideo.srcObject) startDemo();
 };
 
 const estopBtn = document.getElementById('estop-enable');
@@ -1113,7 +1277,9 @@ tick();
 })();
 
 // Auto-connect signaling so phone stream arrives without clicking
-if (inputMode === 'hands') connectSignaling();
+if (inputMode === 'hands') {
+  connectSignaling();
+}
 </script>
 </body>
 </html>
