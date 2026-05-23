@@ -673,7 +673,9 @@ function processHands(results) {
   // Tilt angle → steering. Steer authority decreases at high speed so
   // low position = slow tank-spin, high position = fast gentle arcs.
   driving = false;
-  if (steerHands.length >= 2) {
+  if (steerHands.length > 2) {
+    statusParts.push('⚠ Too many hands');
+  } else if (steerHands.length >= 2) {
     steerHands.sort((a, b) => a[9].x - b[9].x);
     const h0 = steerHands[0], h1 = steerHands[1];
     const bothClenched = isClenched(h0) && isClenched(h1);
