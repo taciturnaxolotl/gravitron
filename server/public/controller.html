@@ -347,8 +347,9 @@
     <button id="mode-gamepad">Gamepad</button>
     <button id="mode-hands" class="active">Hands</button>
   </div>
-  <button id="torch-btn">🔦 Flash</button>
 </div>
+
+<div id="torch-toast" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:50;color:#e0e0e0;"></div>
 
 <div id="main-display">
   <div class="side-bar">
@@ -510,6 +511,56 @@ function deadzone(v) {
 let driving = false;
 
 const PINCH_CLOSE = 0.09;
+const CLAP_CLOSE = 0.18;       // hands this close = clap
+const CLAP_WINDOW_MS = 600;    // two claps must happen within this window
+const CLAP_COOLDOWN_MS = 1000; // ignore claps for this long after a double-clap
+
+let lastClapTime = 0;
+let clapCount = 0;
+let clapCooldownUntil = 0;
+let handsWereSeparated = true; // debounce: must separate before next clap counts
+
+function checkClap(results) {
+  if (Date.now() < clapCooldownUntil) return;
+  if (!results.landmarks || results.landmarks.length < 2) {
+    handsWereSeparated = true;
+    return;
+  }
+  const h0 = results.landmarks[0], h1 = results.landmarks[1];
+  const dx = h0[9].x - h1[9].x, dy = h0[9].y - h1[9].y;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+
+  if (dist < CLAP_CLOSE && handsWereSeparated) {
+    handsWereSeparated = false;
+    const now = Date.now();
+    if (now - lastClapTime < CLAP_WINDOW_MS) {
+      clapCount++;
+      if (clapCount >= 2) {
+        clapCount = 0;
+        clapCooldownUntil = now + CLAP_COOLDOWN_MS;
+        toggleTorch();
+      }
+    } else {
+      clapCount = 1;
+    }
+    lastClapTime = now;
+  } else if (dist > CLAP_CLOSE * 1.5) {
+    handsWereSeparated = true;
+  }
+}
+
+function toggleTorch() {
+  torchOn = !torchOn;
+  const toast = document.getElementById('torch-toast');
+  toast.innerHTML = torchOn
+    ? `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 13v1"/><path d="M17 2a1 1 0 0 1 1 1v4a3 3 0 0 1-.6 1.8l-.6.8A4 4 0 0 0 16 12v8a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-8a4 4 0 0 0-.8-2.4l-.6-.8A3 3 0 0 1 6 7V3a1 1 0 0 1 1-1z"/><path d="M6 6h12"/></svg>`
+    : `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.652 6H18"/><path d="M12 13v1"/><path d="M16 16v4a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-8a4 4 0 0 0-.8-2.4l-.6-.8A3 3 0 0 1 6 7V6"/><path d="m2 2 20 20"/><path d="M7.649 2H17a1 1 0 0 1 1 1v4a3 3 0 0 1-.6 1.8l-.6.8a4 4 0 0 0-.55 1.007"/></svg>`;
+  toast.style.display = 'block';
+  setTimeout(() => { toast.style.display = 'none'; }, 900);
+  if (signalingWs && signalingWs.readyState === 1) {
+    signalingWs.send(JSON.stringify({ type: 'torch', on: torchOn }));
+  }
+}
 
 function isClenched(landmarks) {
   const thumb = landmarks[4];
@@ -651,6 +702,7 @@ function processHands(results) {
 
   drawOverlay(results, steer, throttle, driving);
 
+  checkClap(results);
   handInputs = { left, right, buttons: 0 };
   lastHandDetect = Date.now();
   handStatusEl.textContent = statusParts.length ? statusParts.join('  ') : 'No hands detected';
@@ -1032,18 +1084,7 @@ modeHandsBtn.onclick = async () => {
 };
 
 const estopBtn = document.getElementById('estop-enable');
-const torchBtn = document.getElementById('torch-btn');
-
 let torchOn = false;
-torchBtn.onclick = () => {
-  torchOn = !torchOn;
-  torchBtn.textContent = torchOn ? '🔦 Flash ON' : '🔦 Flash';
-  torchBtn.style.background = torchOn ? '#854d0e' : '';
-  torchBtn.style.borderColor = torchOn ? '#854d0e' : '';
-  if (signalingWs && signalingWs.readyState === 1) {
-    signalingWs.send(JSON.stringify({ type: 'torch', on: torchOn }));
-  }
-};
 
 document.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && !e.repeat) {
