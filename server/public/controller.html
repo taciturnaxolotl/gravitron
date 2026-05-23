@@ -507,11 +507,9 @@ function deadzone(v) {
   return Math.abs(v) < DZ ? 0 : v;
 }
 
-let storedThrottle = 0;
 let driving = false;
 
 const PINCH_CLOSE = 0.09;
-const THROTTLE_ZONE = 0.2; // left 20% of frame
 
 function isClenched(landmarks) {
   const thumb = landmarks[4];
@@ -534,24 +532,6 @@ function drawOverlay(results, steer, throttle, driving) {
   // but the video is CSS-mirrored so x=0 appears on the RIGHT of screen.
   // Canvas is NOT mirrored, so we flip x to match the mirrored video.
   const mx = (nx) => w - nx * w;  // normalized -> pixel, mirrored
-  const mxp = (px) => w - px;     // pixel -> pixel, mirrored
-
-  // Zone divider — throttle is camera-left (x < 0.2) which appears on screen-RIGHT
-  const zoneXpx = mx(THROTTLE_ZONE); // screen-right side
-  camCtx.strokeStyle = '#555';
-  camCtx.lineWidth = 1;
-  camCtx.setLineDash([4, 4]);
-  camCtx.beginPath();
-  camCtx.moveTo(zoneXpx, 0);
-  camCtx.lineTo(zoneXpx, h);
-  camCtx.stroke();
-  camCtx.setLineDash([]);
-
-  camCtx.fillStyle = '#555';
-  camCtx.font = '11px sans-serif';
-  camCtx.textAlign = 'center';
-  camCtx.fillText('THROTTLE', (zoneXpx + w) / 2, h - 8);
-  camCtx.fillText('STEER', zoneXpx / 2, h - 8);
 
   // Draw hand landmarks with skeleton
   const HAND_CONNECTIONS = [
@@ -564,7 +544,6 @@ function drawOverlay(results, steer, throttle, driving) {
   ];
   if (results.landmarks) {
     for (const hand of results.landmarks) {
-      // Bones
       camCtx.strokeStyle = 'rgba(74,222,128,0.5)';
       camCtx.lineWidth = 1.5;
       for (const [a, b] of HAND_CONNECTIONS) {
@@ -573,7 +552,6 @@ function drawOverlay(results, steer, throttle, driving) {
         camCtx.lineTo(mx(hand[b].x), hand[b].y * h);
         camCtx.stroke();
       }
-      // Joints
       for (let i = 0; i < hand.length; i++) {
         const pt = hand[i];
         const isTip = [4,8,12,16,20].includes(i);
@@ -585,76 +563,63 @@ function drawOverlay(results, steer, throttle, driving) {
     }
   }
 
-  // Steer line between hands in steer zone
-  if (results.landmarks) {
-    const steerHands = results.landmarks.filter(lm => lm[9].x >= THROTTLE_ZONE);
-    if (steerHands.length === 2) {
-      const c0 = { x: mx(steerHands[0][9].x), y: steerHands[0][9].y * h };
-      const c1 = { x: mx(steerHands[1][9].x), y: steerHands[1][9].y * h };
-      camCtx.strokeStyle = driving ? '#facc15' : '#666';
-      camCtx.lineWidth = 3;
-      camCtx.beginPath();
-      camCtx.moveTo(c0.x, c0.y);
-      camCtx.lineTo(c1.x, c1.y);
-      camCtx.stroke();
-    }
+  // Handlebar line between the two hands
+  if (results.landmarks && results.landmarks.length >= 2) {
+    const sorted = [...results.landmarks].sort((a, b) => a[9].x - b[9].x);
+    const c0 = { x: mx(sorted[0][9].x), y: sorted[0][9].y * h };
+    const c1 = { x: mx(sorted[1][9].x), y: sorted[1][9].y * h };
+    camCtx.strokeStyle = driving ? '#facc15' : '#666';
+    camCtx.lineWidth = 3;
+    camCtx.beginPath();
+    camCtx.moveTo(c0.x, c0.y);
+    camCtx.lineTo(c1.x, c1.y);
+    camCtx.stroke();
+
+    // Center dot showing throttle position
+    const cx = (c0.x + c1.x) / 2;
+    const cy = (c0.y + c1.y) / 2;
+    camCtx.beginPath();
+    camCtx.arc(cx, cy, 6, 0, 2 * Math.PI);
+    camCtx.fillStyle = driving ? '#facc15' : '#666';
+    camCtx.fill();
   }
 
-  // Throttle bar — drawn on screen-right (camera-left zone)
-  const barMargin = 10;
-  const barW = (w - zoneXpx) - 2 * barMargin;
-  const barX = zoneXpx + barMargin;
-  const barH = h - 40;
-  const barY = 20;
-  const fillH = throttle * barH;
-  camCtx.strokeStyle = '#555';
-  camCtx.lineWidth = 2;
-  camCtx.strokeRect(barX, barY, barW, barH);
-  camCtx.fillStyle = driving ? '#4ade80' : '#ef4444';
-  camCtx.fillRect(barX, barY + barH - fillH, barW, fillH);
-  camCtx.font = 'bold 14px monospace';
-  camCtx.textAlign = 'center';
-  camCtx.fillStyle = driving ? '#4ade80' : '#ef4444';
-  camCtx.fillText(
-    driving ? Math.round(throttle * 100) + '%' : (throttle > 0 ? Math.round(throttle * 100) + '% STOPPED' : 'STOPPED'),
-    barX + barW / 2,
-    barY - 6
-  );
+  // Throttle zone markers — horizontal lines at 20% and 80% of frame height
+  camCtx.strokeStyle = '#444';
+  camCtx.lineWidth = 1;
+  camCtx.setLineDash([4, 4]);
+  camCtx.beginPath(); camCtx.moveTo(0, h * 0.2); camCtx.lineTo(w, h * 0.2); camCtx.stroke();
+  camCtx.beginPath(); camCtx.moveTo(0, h * 0.8); camCtx.lineTo(w, h * 0.8); camCtx.stroke();
+  camCtx.setLineDash([]);
+  camCtx.fillStyle = '#444';
+  camCtx.font = '11px sans-serif';
+  camCtx.textAlign = 'left';
+  camCtx.fillText('fast', 6, h * 0.2 - 4);
+  camCtx.fillText('slow', 6, h * 0.8 - 4);
 }
 
 function processHands(results) {
   const statusParts = [];
   let steer = 0;
+  let throttle = 0;
   let left = 0, right = 0;
 
   // Separate hands into throttle zone (left 20%) and steer zone (right 80%)
-  let throttleHand = null;
+  // All hands are steer hands now — no throttle zone
   const steerHands = [];
 
   if (results.landmarks) {
     for (const lm of results.landmarks) {
-      if (lm[9].x < THROTTLE_ZONE) {
-        throttleHand = lm;
-      } else {
-        steerHands.push(lm);
-      }
+      steerHands.push(lm);
     }
   }
 
-  // Throttle: pinch in left zone sets value, persists on release
-  if (throttleHand && isClenched(throttleHand)) {
-    const pinchY = (throttleHand[4].y + throttleHand[8].y) / 2;
-    storedThrottle = Math.max(0, Math.min(1, 1 - pinchY / 0.9));
-    statusParts.push('Throttle:' + Math.round(storedThrottle * 100) + '%');
-  } else if (throttleHand) {
-    statusParts.push('Throttle:' + Math.round(storedThrottle * 100) + '% (set)');
-  }
-
-  // Steer: both hands in steer zone, both clenched
+  // Steer: both hands clenched, handlebar line controls everything.
+  // Center-Y of the line → throttle (bottom 80%=0, top 20%=1).
+  // Tilt angle → steering. Steer authority decreases at high speed so
+  // low position = slow tank-spin, high position = fast gentle arcs.
   driving = false;
   if (steerHands.length >= 2) {
-    // Sort by x so h0 is always the camera-left hand and h1 is camera-right
-    // (lower x = further left in camera space)
     steerHands.sort((a, b) => a[9].x - b[9].x);
     const h0 = steerHands[0], h1 = steerHands[1];
     const bothClenched = isClenched(h0) && isClenched(h1);
@@ -664,8 +629,19 @@ function processHands(results) {
       const dx = rx - lx, dy = ry - ly;
       const angle = Math.atan2(-dy, dx);
       steer = Math.max(-1, Math.min(1, angle / (75 * Math.PI / 180)));
+
+      // Center Y of the handlebar, clamped to the usable vertical range
+      const centerY = (ly + ry) / 2;
+      throttle = Math.max(0, Math.min(1, (0.8 - centerY) / (0.8 - 0.2)));
+
       driving = true;
-      statusParts.push('Steer:' + (steer >= 0 ? '+' : '') + Math.round(steer * 100) + '%');
+      statusParts.push('Throttle:' + Math.round(throttle * 100) + '%  Steer:' + (steer >= 0 ? '+' : '') + Math.round(steer * 100) + '%');
+
+      // Steer authority: full counter-rotation at throttle=0, gentle at throttle=1
+      const steerExp = Math.sign(steer) * Math.pow(Math.abs(steer), 1.7);
+      const steerScale = 2 * (1 - throttle * 0.75);
+      left  = Math.max(-1, Math.min(1, throttle + steerExp * steerScale));
+      right = Math.max(-1, Math.min(1, throttle - steerExp * steerScale));
     } else {
       statusParts.push('Open hands — stopped');
     }
@@ -673,16 +649,7 @@ function processHands(results) {
     statusParts.push('Need 2 hands to steer');
   }
 
-  // Apply motor output only when driving.
-  // Steer is independent of throttle so a full hard turn always spins motors
-  // opposite each other; throttle scales the overall magnitude.
-  if (driving) {
-    const steerExp = Math.sign(steer) * Math.pow(Math.abs(steer), 1.7);
-    left  = Math.max(-1, Math.min(1, storedThrottle + steerExp * 2));
-    right = Math.max(-1, Math.min(1, storedThrottle - steerExp * 2));
-  }
-
-  drawOverlay(results, steer, storedThrottle, driving);
+  drawOverlay(results, steer, throttle, driving);
 
   handInputs = { left, right, buttons: 0 };
   lastHandDetect = Date.now();
