@@ -124,6 +124,16 @@ function connectWS() {
     if (msg.type === 'request-stream') {
       dbg('Controller requested stream, creating offer...');
       await startPeerConnection();
+    } else if (msg.type === 'torch') {
+      const track = stream && stream.getVideoTracks()[0];
+      if (track) {
+        try {
+          await track.applyConstraints({ advanced: [{ torch: msg.on }] });
+          dbg('Torch ' + (msg.on ? 'on' : 'off'));
+        } catch (e) {
+          dbg('Torch not supported: ' + e.message);
+        }
+      }
     } else if (msg.type === 'answer') {
       dbg('Got answer, setting remote description...');
       await pc.setRemoteDescription(msg);

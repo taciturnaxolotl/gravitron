@@ -293,14 +293,14 @@
     top: 12px;
     right: 12px;
     z-index: 30;
-    border: none;
-    padding: 0;
-    border-radius: 0;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     font-weight: normal;
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid #333;
+    background: #1e1e1e;
     cursor: default;
     pointer-events: none;
-    background: none;
     color: #e0e0e0;
   }
   body.estopped #estop-enable {
@@ -347,6 +347,7 @@
     <button id="mode-gamepad">Gamepad</button>
     <button id="mode-hands" class="active">Hands</button>
   </div>
+  <button id="torch-btn">🔦 Flash</button>
 </div>
 
 <div id="main-display">
@@ -1064,6 +1065,18 @@ modeHandsBtn.onclick = async () => {
 };
 
 const estopBtn = document.getElementById('estop-enable');
+const torchBtn = document.getElementById('torch-btn');
+
+let torchOn = false;
+torchBtn.onclick = () => {
+  torchOn = !torchOn;
+  torchBtn.textContent = torchOn ? '🔦 Flash ON' : '🔦 Flash';
+  torchBtn.style.background = torchOn ? '#854d0e' : '';
+  torchBtn.style.borderColor = torchOn ? '#854d0e' : '';
+  if (signalingWs && signalingWs.readyState === 1) {
+    signalingWs.send(JSON.stringify({ type: 'torch', on: torchOn }));
+  }
+};
 
 document.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && !e.repeat) {
