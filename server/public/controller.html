@@ -345,7 +345,7 @@
 <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center;">
   <div class="input-toggle">
     <button id="mode-gamepad">Gamepad</button>
-    <button id="mode-hands" class="active">Hands</button>
+    <button id="mode-hands" class="active">Enable Hands</button>
   </div>
   <button id="lock-btn">Request Control</button>
   <div class="indicator" style="font-size:0.8rem;">
@@ -693,7 +693,7 @@ function processHands(results) {
 
       // Steer authority: full counter-rotation at throttle=0, gentle at throttle=1
       const steerExp = Math.sign(steer) * Math.pow(Math.abs(steer), 1.7);
-      const steerScale = 2 * (1 - throttle * 0.75);
+      const steerScale = 1.4 * (1 - throttle * 0.75);
       left  = Math.max(-1, Math.min(1, throttle + steerExp * steerScale));
       right = Math.max(-1, Math.min(1, throttle - steerExp * steerScale));
     } else {
@@ -743,8 +743,11 @@ async function startLocalWebcam() {
     handStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
     camVideo.srcObject = handStream;
   } catch (e) {
+    localWebcamStarted = false; // allow retry
     log('Local webcam error: ' + e.message);
-    handStatusEl.textContent = 'Webcam failed -- hand tracking unavailable';
+    handStatusEl.textContent = 'Webcam failed — click Hands to retry';
+    modeHandsBtn.textContent = 'Enable Hands';
+    return;
   }
   if (!handLandmarker) {
     await initHandTracking();
@@ -923,7 +926,6 @@ function stopCamera() {
 }
 
 document.getElementById('cam-prompt').onclick = () => {
-  startLocalWebcam();
   connectSignaling();
 };
 
@@ -1296,6 +1298,8 @@ modeHandsBtn.onclick = async () => {
   modeGamepadBtn.classList.remove('active');
   cameraWrap.classList.remove('hidden');
   await startLocalWebcam();
+  if (!localWebcamStarted) return;
+  modeHandsBtn.textContent = 'Hands';
   runHandLoop();
   // Start demo if no phone is streaming
   if (!phoneVideo.srcObject) startDemo();
