@@ -147,60 +147,85 @@ function connectWS() {
 }
 
 let cfSessionId = null;
+let publishing = false;
+let publishRetryTimer = null;
 
 async function publishToCF() {
-  if (!stream) { dbg('No stream!'); return; }
-  if (pc) { pc.close(); pc = null; }
+  if (!stream) { dbg('No stream, skipping publish'); return; }
+  if (publishing) { dbg('Already publishing, skipping'); return; }
+  publishing = true;
+  clearTimeout(publishRetryTimer);
 
-  // 1. Create a CF session
-  const session = await fetch('/cf/session/new', { method: 'POST' }).then(r => r.json());
-  cfSessionId = session.sessionId;
-  dbg('CF session: ' + cfSessionId);
+  try {
+    if (pc) { pc.close(); pc = null; }
 
-  // 2. Create local PC with CF's STUN
-  pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] });
+    // 1. Create a CF session
+    const session = await fetch('/cf/session/new', { method: 'POST' }).then(r => r.json());
+    if (!session.sessionId) throw new Error('No sessionId: ' + JSON.stringify(session));
+    cfSessionId = session.sessionId;
+    dbg('CF session: ' + cfSessionId);
 
-  pc.onconnectionstatechange = () => {
-    dbg('RTC state: ' + pc.connectionState);
-    if (pc.connectionState === 'connected') setStatus('Streaming via Cloudflare', 'ok');
-    if (pc.connectionState === 'failed') setStatus('Stream failed', 'warn');
-  };
+    // 2. Create local PC
+    pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] });
 
-  // 3. Add tracks
-  const transceivers = stream.getTracks().map(track => {
-    const t = pc.addTransceiver(track, { direction: 'sendonly' });
-    return { mid: t.mid, trackName: track.id };
-  });
+    pc.onconnectionstatechange = () => {
+      dbg('RTC state: ' + pc.connectionState);
+      if (pc.connectionState === 'connected') {
+        setStatus('Streaming via Cloudflare', 'ok');
+      } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        setStatus('Stream lost, reconnecting...', 'warn');
+        publishing = false;
+        publishRetryTimer = setTimeout(publishToCF, 2000);
+      }
+    };
 
-  // 4. Create offer
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
+    // 3. Add tracks as sendonly transceivers
+    stream.getTracks().forEach(track => {
+      pc.addTransceiver(track, { direction: 'sendonly' });
+    });
 
-  // 5. Push tracks to CF
-  const result = await fetch(`/cf/session/${cfSessionId}/tracks/new`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      sessionDescription: { type: 'offer', sdp: pc.localDescription.sdp },
-      tracks: stream.getTracks().map((track, i) => ({
-        location: 'local',
-        mid: String(i),
-        trackName: track.id,
-      })),
-    }),
-  }).then(r => r.json());
+    // 4. Create offer and get mids
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
 
-  dbg('CF tracks result: ' + JSON.stringify(result).slice(0, 100));
+    // mids are stable after setLocalDescription
+    const trackEntries = stream.getTracks().map((track, i) => ({
+      location: 'local',
+      mid: pc.getTransceivers()[i]?.mid ?? String(i),
+      trackName: track.id,
+    }));
 
-  if (result.errorCode) { dbg('CF error: ' + result.errorDescription); return; }
+    // 5. Push tracks to CF
+    const result = await fetch(`/cf/session/${cfSessionId}/tracks/new`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionDescription: { type: 'offer', sdp: pc.localDescription.sdp },
+        tracks: trackEntries,
+      }),
+    }).then(r => r.json());
 
-  // 6. Set CF's answer
-  await pc.setRemoteDescription({ type: 'answer', sdp: result.sessionDescription.sdp });
+    dbg('CF result: ' + JSON.stringify(result).slice(0, 120));
+    if (result.errorCode) throw new Error('CF error: ' + result.errorDescription);
 
-  // 7. Tell server the session ID + track names so drivers can pull
-  const trackNames = stream.getTracks().map(t => ({ trackName: t.id, kind: t.kind }));
-  ws.send(JSON.stringify({ type: 'cf-session', sessionId: cfSessionId, tracks: trackNames }));
-  setStatus('Published to Cloudflare', 'ok');
+    // 6. Set answer
+    await pc.setRemoteDescription({ type: 'answer', sdp: result.sessionDescription.sdp });
+
+    // 7. Announce session to server
+    const trackNames = stream.getTracks().map(t => ({ trackName: t.id, kind: t.kind }));
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'cf-session', sessionId: cfSessionId, tracks: trackNames }));
+    }
+    setStatus('Streaming via Cloudflare', 'ok');
+    dbg('Published to CF successfully');
+
+  } catch (e) {
+    dbg('publishToCF error: ' + e.message);
+    setStatus('Publish failed, retrying...', 'warn');
+    publishRetryTimer = setTimeout(publishToCF, 3000);
+  } finally {
+    publishing = false;
+  }
 }
 
 const camSwitcher = document.getElementById('cam-switcher');
