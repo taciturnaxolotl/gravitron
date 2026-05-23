@@ -6,6 +6,7 @@
     "start": "bun server.js"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "express": "^4.21.0",
     "ws": "^8.18.0"
   }

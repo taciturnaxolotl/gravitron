@@ -342,17 +342,21 @@
   </div>
 </div>
 
-<div style="display: flex; gap: 12px; align-items: center;">
+<div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center;">
   <div class="input-toggle">
     <button id="mode-gamepad">Gamepad</button>
     <button id="mode-hands" class="active">Hands</button>
   </div>
-  <button id="lock-btn">Acquire Lock</button>
+  <button id="lock-btn">Request Control</button>
   <div class="indicator" style="font-size:0.8rem;">
     <div class="dot off" id="lock-dot"></div>
     <span id="driver-count">0 drivers</span>
   </div>
 </div>
+<div style="font-size:0.75rem;color:#666;text-align:center;">
+  <span id="my-name"></span> &middot; <span id="queue-status"></span>
+</div>
+<div id="countdown-banner" style="display:none;font-size:0.8rem;font-weight:600;padding:4px 16px;border-radius:6px;background:#78350f;color:#fbbf24;text-align:center;"></div>
 
 <div id="torch-toast" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:50;color:#e0e0e0;"></div>
 
@@ -430,8 +434,11 @@ const logEl       = document.getElementById('log');
 const lockBtn     = document.getElementById('lock-btn');
 const lockDot     = document.getElementById('lock-dot');
 const driverCountEl = document.getElementById('driver-count');
+const myNameEl    = document.getElementById('my-name');
+const queueStatusEl = document.getElementById('queue-status');
 
 let hasLock = false;
+let inQueue = false;
 let lastAck = 0;
 let lastRadio = 0;
 let radioFail = false;
@@ -460,11 +467,23 @@ function setDot(el, cls) {
   el.className = 'dot ' + cls;
 }
 
+const countdownBanner = document.getElementById('countdown-banner');
+function updateCountdown(secondsLeft, hasQueue) {
+  if (!hasLock) { countdownBanner.style.display = 'none'; return; }
+  if (secondsLeft > 15 && !hasQueue) { countdownBanner.style.display = 'none'; return; }
+  countdownBanner.style.display = 'block';
+  const urgent = secondsLeft <= 10;
+  countdownBanner.style.background = urgent ? '#7f1d1d' : '#78350f';
+  countdownBanner.style.color = urgent ? '#fca5a5' : '#fbbf24';
+  countdownBanner.textContent = hasQueue
+    ? `⏱ Control releases in ${secondsLeft}s — someone is waiting`
+    : `⏱ Inactive — control releases in ${secondsLeft}s`;
+}
+
 function log(msg) {
   const now = new Date().toLocaleTimeString();
   logEl.textContent = `[${now}] ${msg}`;
 }
-
 function handleAckBytes(bytes) {
   for (const b of bytes) {
     if (b === 0xAC) {
@@ -741,7 +760,6 @@ function connectSignaling() {
     setDot(serialDot, 'on');
     serialLabel.textContent = 'Server';
     handStatusEl.textContent = 'Waiting for phone...';
-    signalingWs.send(JSON.stringify({ type: 'request-stream' }));
   };
 
   signalingWs.onmessage = async (e) => {
@@ -749,8 +767,9 @@ function connectSignaling() {
     log('WS recv: ' + msg.type);
 
     if (msg.type === 'phone-joined') {
-      handStatusEl.textContent = 'Phone joined, negotiating...';
-      signalingWs.send(JSON.stringify({ type: 'request-stream' }));
+      handStatusEl.textContent = 'Phone joined, waiting for stream...';
+    } else if (msg.type === 'cf-session') {
+      await pullFromCF(msg.sessionId, msg.tracks || []);
     } else if (msg.type === 'phone-left') {
       handStatusEl.textContent = 'Phone disconnected';
       phoneVideo.srcObject = null;
@@ -759,38 +778,49 @@ function connectSignaling() {
     } else if (msg.type === 'driver-status') {
       driverCountEl.textContent = msg.drivers + ' driver' + (msg.drivers === 1 ? '' : 's');
       hasLock = msg.hasLock;
+      inQueue = msg.queuePos >= 0;
+      if (msg.name) myNameEl.textContent = msg.name;
+
       if (msg.hasLock) {
         setDot(lockDot, 'on');
-        lockBtn.textContent = 'Release Lock';
+        lockBtn.textContent = 'Release Control';
+        queueStatusEl.textContent = 'you have control';
+      } else if (msg.queuePos >= 0) {
+        setDot(lockDot, 'warn');
+        lockBtn.textContent = 'Cancel Request';
+        queueStatusEl.textContent = msg.queuePos === 0
+          ? 'up next'
+          : `queue position ${msg.queuePos + 1}`;
       } else if (msg.locked) {
         setDot(lockDot, 'warn');
-        lockBtn.textContent = 'Locked by other';
+        lockBtn.textContent = 'Request Control';
+        queueStatusEl.textContent = `${msg.lockHolder} has control · ${msg.queue.length} waiting`;
       } else {
         setDot(lockDot, 'off');
-        lockBtn.textContent = 'Acquire Lock';
+        lockBtn.textContent = 'Request Control';
+        queueStatusEl.textContent = 'control is free';
       }
     } else if (msg.type === 'lock-revoked') {
       hasLock = false;
+      inQueue = false;
       setDot(lockDot, 'off');
-      lockBtn.textContent = 'Acquire Lock';
+      lockBtn.textContent = 'Request Control';
+      queueStatusEl.textContent = 'control revoked by operator';
+      countdownBanner.style.display = 'none';
       log('Lock revoked by operator');
     } else if (msg.type === 'lock-denied') {
       log('Lock already held by another driver');
+    } else if (msg.type === 'ping') {
+      signalingWs.send(JSON.stringify({ type: 'pong' }));
+    } else if (msg.type === 'lock-countdown') {
+      // handled by countdown UI
+      updateCountdown(msg.secondsLeft, msg.hasQueue);
     } else if (msg.type === 'ack') {
       handleAckBytes(msg.bytes);
     } else if (msg.type === 'operator-left') {
       setDot(serialDot, 'off');
       serialLabel.textContent = 'No operator';
       log('Operator disconnected');
-    } else if (msg.type === 'offer') {
-      if (rtcPc) rtcPc.close();
-      createRtcPc();
-      await rtcPc.setRemoteDescription(msg);
-      const answer = await rtcPc.createAnswer();
-      await rtcPc.setLocalDescription(answer);
-      signalingWs.send(JSON.stringify(rtcPc.localDescription));
-    } else if (msg.type === 'candidate' && rtcPc) {
-      await rtcPc.addIceCandidate(msg.candidate);
     }
   };
 
@@ -801,7 +831,6 @@ function connectSignaling() {
     setDot(lockDot, 'off');
     lockBtn.textContent = 'Acquire Lock';
     handStatusEl.textContent = 'Signaling disconnected';
-    // Close stale RTC connection
     if (rtcPc) { rtcPc.close(); rtcPc = null; }
     phoneVideo.srcObject = null;
     cameraWrap.classList.remove('active');
@@ -809,33 +838,21 @@ function connectSignaling() {
   };
 }
 
-const iceServers = [
-  { urls: 'stun:stun.relay.metered.ca:80' },
-  { urls: 'turn:global.relay.metered.ca:80', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
-  { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
-  { urls: 'turn:global.relay.metered.ca:443', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
-  { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
-];
+async function pullFromCF(phoneSessionId, phoneTracks) {
+  if (rtcPc) { rtcPc.close(); rtcPc = null; }
+  log('Pulling from CF session: ' + phoneSessionId);
 
-function createRtcPc() {
-  rtcPc = new RTCPeerConnection({ iceServers });
+  // 1. Create our own CF session
+  const session = await fetch('/cf/session/new', { method: 'POST' }).then(r => r.json());
+  const mySessionId = session.sessionId;
 
-  rtcPc.onicecandidate = (e) => {
-    if (e.candidate && signalingWs && signalingWs.readyState === 1) {
-      signalingWs.send(JSON.stringify({ type: 'candidate', candidate: e.candidate }));
-    }
-  };
+  // 2. Create local PC
+  rtcPc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] });
 
   rtcPc.ontrack = (e) => {
-    log('Got remote track: ' + e.track.kind);
-    let stream;
-    if (e.streams && e.streams[0]) {
-      stream = e.streams[0];
-    } else {
-      stream = new MediaStream();
-      stream.addTrack(e.track);
-    }
-    phoneVideo.srcObject = stream;
+    log('Got CF track: ' + e.track.kind);
+    if (!phoneVideo.srcObject) phoneVideo.srcObject = new MediaStream();
+    phoneVideo.srcObject.addTrack(e.track);
     phoneVideo.play().catch(() => {});
     cameraWrap.classList.add('active');
     handStatusEl.textContent = 'Phone camera streaming';
@@ -847,7 +864,7 @@ function createRtcPc() {
   rtcPc.onconnectionstatechange = () => {
     log('RTC state: ' + rtcPc.connectionState);
     if (rtcPc.connectionState === 'disconnected' || rtcPc.connectionState === 'failed') {
-      handStatusEl.textContent = 'Phone connection lost, reconnecting...';
+      handStatusEl.textContent = 'Stream lost, reconnecting...';
       cameraWrap.classList.remove('active');
       phoneVideo.srcObject = null;
       setTimeout(() => {
@@ -858,8 +875,39 @@ function createRtcPc() {
       }, 3000);
     }
   };
-}
 
+  // 3. Pull the phone's tracks via CF
+  const pullResult = await fetch(`/cf/session/${mySessionId}/tracks/new`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tracks: phoneTracks.map(t => ({
+        location: 'remote',
+        sessionId: phoneSessionId,
+        trackName: t.trackName,
+      })),
+    }),
+  }).then(r => r.json());
+
+  log('CF pull: ' + JSON.stringify(pullResult).slice(0, 120));
+  if (pullResult.errorCode) { log('CF pull error: ' + pullResult.errorDescription); return; }
+
+  // 4. Set the offer CF gave us
+  await rtcPc.setRemoteDescription({ type: 'offer', sdp: pullResult.sessionDescription.sdp });
+
+  // 5. Create answer
+  const answer = await rtcPc.createAnswer();
+  await rtcPc.setLocalDescription(answer);
+
+  // 6. Send answer back to CF to complete the pull
+  await fetch(`/cf/session/${mySessionId}/renegotiate`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionDescription: { type: 'answer', sdp: answer.sdp } }),
+  });
+
+  log('CF pull complete');
+}
 function stopCamera() {
   if (handStream) {
     handStream.getTracks().forEach(t => t.stop());
@@ -1212,8 +1260,11 @@ lockBtn.onclick = () => {
   if (!signalingWs || signalingWs.readyState !== 1) return;
   if (hasLock) {
     signalingWs.send(JSON.stringify({ type: 'release-lock' }));
+    countdownBanner.style.display = 'none';
+  } else if (inQueue) {
+    signalingWs.send(JSON.stringify({ type: 'cancel-lock-request' }));
   } else {
-    signalingWs.send(JSON.stringify({ type: 'acquire-lock' }));
+    signalingWs.send(JSON.stringify({ type: 'request-lock' }));
   }
 };
 

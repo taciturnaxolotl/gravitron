@@ -110,9 +110,11 @@ function connectWS() {
   dbg('WS connecting to ' + url);
   ws = new WebSocket(url);
 
-  ws.onopen = () => {
+  ws.onopen = async () => {
     dbg('WS open');
     setStatus('Connected, waiting for controller...', 'warn');
+    // If we already have a stream, publish immediately
+    if (stream) await publishToCF();
   };
 
   ws.onerror = (e) => dbg('WS error: ' + e.type);
@@ -122,8 +124,8 @@ function connectWS() {
     dbg('WS recv: ' + msg.type);
 
     if (msg.type === 'request-stream') {
-      dbg('Controller requested stream, creating offer...');
-      await startPeerConnection();
+      dbg('Controller requested stream, publishing to CF Calls...');
+      await publishToCF();
     } else if (msg.type === 'torch') {
       const track = stream && stream.getVideoTracks()[0];
       if (track) {
@@ -134,13 +136,6 @@ function connectWS() {
           dbg('Torch not supported: ' + e.message);
         }
       }
-    } else if (msg.type === 'answer') {
-      dbg('Got answer, setting remote description...');
-      await pc.setRemoteDescription(msg);
-      dbg('Remote description set');
-    } else if (msg.type === 'candidate' && pc) {
-      dbg('Adding ICE candidate');
-      await pc.addIceCandidate(msg.candidate);
     }
   };
 
@@ -151,68 +146,61 @@ function connectWS() {
   };
 }
 
-const iceServers = [
-  { urls: 'stun:stun.relay.metered.ca:80' },
-  { urls: 'turn:global.relay.metered.ca:80', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
-  { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
-  { urls: 'turn:global.relay.metered.ca:443', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
-  { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
-];
+let cfSessionId = null;
 
-function createPC() {
-  pc = new RTCPeerConnection({ iceServers });
+async function publishToCF() {
+  if (!stream) { dbg('No stream!'); return; }
+  if (pc) { pc.close(); pc = null; }
 
-  pc.onicecandidate = (e) => {
-    if (e.candidate) {
-      dbg('ICE candidate: ' + e.candidate.candidate.slice(0, 80));
-      if (ws.readyState === 1) {
-        ws.send(JSON.stringify({ type: 'candidate', candidate: e.candidate }));
-      }
-    } else {
-      dbg('ICE gathering complete');
-    }
-  };
+  // 1. Create a CF session
+  const session = await fetch('/cf/session/new', { method: 'POST' }).then(r => r.json());
+  cfSessionId = session.sessionId;
+  dbg('CF session: ' + cfSessionId);
 
-  pc.onicegatheringstatechange = () => {
-    dbg('ICE gathering: ' + pc.iceGatheringState);
-  };
-
-  pc.onicecandidateerror = (e) => {
-    dbg('ICE error: ' + e.errorCode + ' ' + e.errorText + ' url=' + e.url);
-  };
-
-  pc.oniceconnectionstatechange = () => {
-    dbg('ICE state: ' + pc.iceConnectionState);
-  };
+  // 2. Create local PC with CF's STUN
+  pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] });
 
   pc.onconnectionstatechange = () => {
     dbg('RTC state: ' + pc.connectionState);
-    if (pc.connectionState === 'connected') {
-      setStatus('Streaming to controller', 'ok');
-    } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-      setStatus('Connection lost, reconnecting...', 'warn');
-      // Only re-offer if driver re-requests — don't self-initiate to avoid storms
-    }
+    if (pc.connectionState === 'connected') setStatus('Streaming via Cloudflare', 'ok');
+    if (pc.connectionState === 'failed') setStatus('Stream failed', 'warn');
   };
 
-  pc.onsignalingstatechange = () => {
-    dbg('Signaling state: ' + pc.signalingState);
-  };
-}
-
-async function startPeerConnection() {
-  if (!stream) { dbg('No stream!'); return; }
-  if (pc) pc.close();
-  createPC();
-  stream.getTracks().forEach(t => {
-    dbg('Adding track: ' + t.kind + ' ' + t.id);
-    pc.addTrack(t, stream);
+  // 3. Add tracks
+  const transceivers = stream.getTracks().map(track => {
+    const t = pc.addTransceiver(track, { direction: 'sendonly' });
+    return { mid: t.mid, trackName: track.id };
   });
+
+  // 4. Create offer
   const offer = await pc.createOffer();
-  dbg('Offer created, setting local description...');
   await pc.setLocalDescription(offer);
-  dbg('Sending offer');
-  ws.send(JSON.stringify(pc.localDescription));
+
+  // 5. Push tracks to CF
+  const result = await fetch(`/cf/session/${cfSessionId}/tracks/new`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionDescription: { type: 'offer', sdp: pc.localDescription.sdp },
+      tracks: stream.getTracks().map((track, i) => ({
+        location: 'local',
+        mid: String(i),
+        trackName: track.id,
+      })),
+    }),
+  }).then(r => r.json());
+
+  dbg('CF tracks result: ' + JSON.stringify(result).slice(0, 100));
+
+  if (result.errorCode) { dbg('CF error: ' + result.errorDescription); return; }
+
+  // 6. Set CF's answer
+  await pc.setRemoteDescription({ type: 'answer', sdp: result.sessionDescription.sdp });
+
+  // 7. Tell server the session ID + track names so drivers can pull
+  const trackNames = stream.getTracks().map(t => ({ trackName: t.id, kind: t.kind }));
+  ws.send(JSON.stringify({ type: 'cf-session', sessionId: cfSessionId, tracks: trackNames }));
+  setStatus('Published to Cloudflare', 'ok');
 }
 
 const camSwitcher = document.getElementById('cam-switcher');

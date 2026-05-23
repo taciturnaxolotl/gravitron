@@ -23,7 +23,7 @@
     border: 1px solid #2a2a2a;
     border-radius: 8px;
     padding: 20px 28px;
-    width: 320px;
+    width: 480px;
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -75,10 +75,36 @@
     color: #e0e0e0;
   }
   .stat-label { font-size: 0.75rem; color: #666; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+  }
+  th {
+    text-align: left;
+    color: #555;
+    font-weight: normal;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 0 12px 8px 0;
+    border-bottom: 1px solid #2a2a2a;
+  }
+  td {
+    padding: 7px 12px 7px 0;
+    border-bottom: 1px solid #1e1e1e;
+    color: #ccc;
+    vertical-align: middle;
+  }
+  td.name { font-weight: 500; color: #e0e0e0; }
+  td.ping { font-variant-numeric: tabular-nums; color: #888; }
+  td.badge { font-size: 1rem; }
+  tr.has-lock td { color: #4ade80; }
+  tr.in-queue td { color: #fbbf24; }
   #log {
     font-size: 0.7rem;
     color: #555;
-    width: 320px;
+    width: 480px;
     max-height: 120px;
     overflow-y: auto;
     text-align: center;
@@ -115,10 +141,20 @@
     </div>
     <div>
       <div class="stat" id="lock-status">—</div>
-      <div class="stat-label">drive lock</div>
+      <div class="stat-label">in control</div>
     </div>
   </div>
-  <button id="force-release-btn" disabled style="width:100%;">Force Release Lock</button>
+  <div id="queue-list" style="font-size:0.8rem;color:#888;min-height:1em;"></div>
+  <div id="driver-list" style="font-size:0.75rem;color:#555;min-height:1em;"></div>
+  <button id="force-release-btn" disabled style="width:100%;">Force Release Control</button>
+</div>
+
+<div class="card" id="drivers-card" style="display:none;">
+  <div class="card-title">Drivers</div>
+  <table id="drivers-table">
+    <thead><tr><th></th><th>Name</th><th>Location</th><th>Ping</th><th>Status</th></tr></thead>
+    <tbody id="drivers-tbody"></tbody>
+  </table>
 </div>
 
 <div id="log"></div>
@@ -131,6 +167,10 @@ const wsDot       = document.getElementById('ws-dot');
 const wsLabel     = document.getElementById('ws-label');
 const driverCount = document.getElementById('driver-count');
 const lockStatus  = document.getElementById('lock-status');
+const queueList   = document.getElementById('queue-list');
+const driverList  = document.getElementById('driver-list');
+const driversCard = document.getElementById('drivers-card');
+const driversTbody = document.getElementById('drivers-tbody');
 const forceReleaseBtn = document.getElementById('force-release-btn');
 const logEl       = document.getElementById('log');
 
@@ -222,8 +262,35 @@ function connect() {
 
     if (msg.type === 'status') {
       driverCount.textContent = msg.drivers;
-      lockStatus.textContent = msg.locked ? 'held' : 'free';
+      lockStatus.textContent = msg.lockHolder || '—';
       forceReleaseBtn.disabled = !msg.locked;
+      queueList.textContent = msg.queue && msg.queue.length
+        ? 'Queue: ' + msg.queue.map(d => d.name).join(' → ')
+        : '';
+      driverList.textContent = '';
+
+      // Driver table
+      if (msg.allDrivers && msg.allDrivers.length > 0) {
+        driversCard.style.display = 'block';
+        driversTbody.innerHTML = msg.allDrivers.map(d => {
+          const loc = [d.city, d.region, d.country].filter(Boolean).join(', ') || '—';
+          const ping = d.ping != null ? d.ping + 'ms' : '—';
+          const flag = d.flag || '';
+          let status = '—';
+          if (d.hasLock) status = '🎮 driving';
+          else if (d.queuePos >= 0) status = `#${d.queuePos + 1} in queue`;
+          const cls = d.hasLock ? 'has-lock' : d.queuePos >= 0 ? 'in-queue' : '';
+          return `<tr class="${cls}">
+            <td class="badge">${flag}</td>
+            <td class="name">${d.name}</td>
+            <td>${loc}</td>
+            <td class="ping">${ping}</td>
+            <td>${status}</td>
+          </tr>`;
+        }).join('');
+      } else {
+        driversCard.style.display = 'none';
+      }
     }
 
     if (msg.type === 'frame') {
