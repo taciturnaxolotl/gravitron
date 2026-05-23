@@ -276,19 +276,13 @@
   #estop-banner {
     display: none;
     position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
+    inset: 0;
     z-index: 20;
-    background: #ef4444;
-    color: #fff;
-    text-align: center;
-    font-weight: 700;
-    font-size: 1.3rem;
-    letter-spacing: 2px;
-    padding: 10px 0;
+    pointer-events: none;
+    border: 4px solid #ef4444;
+    box-shadow: inset 0 0 80px rgba(239,68,68,0.12);
   }
-  body.estopped { outline: 6px solid #ef4444; outline-offset: -6px; }
+  body.estopped #estop-banner { display: block; }
   #estop-enable {
     position: fixed;
     top: 12px;
@@ -303,27 +297,32 @@
     cursor: default;
     pointer-events: none;
     color: #e0e0e0;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
   }
   body.estopped #estop-enable {
-    background: #facc15;
-    color: #000;
-    border-color: #facc15;
+    background: #ef4444;
+    color: #fff;
+    border-color: #ef4444;
     cursor: pointer;
     pointer-events: auto;
+    animation: estop-pulse 1s ease-in-out infinite;
   }
-  body.estopped #estop-banner { display: block; }
+  @keyframes estop-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
 </style>
 </head>
 <body>
-<button id="connect-btn">Connect Serial</button>
-<div id="estop-banner">E-STOPPED</div>
+
+<div id="estop-banner"></div>
 
 <h1>K2-B4</h1>
 
 <div id="status-bar">
   <div class="indicator">
     <div class="dot off" id="serial-dot"></div>
-    <span id="serial-label">Serial</span>
+    <span id="serial-label">Server</span>
   </div>
   <div class="indicator">
     <div class="dot off" id="gamepad-dot"></div>
@@ -347,6 +346,11 @@
   <div class="input-toggle">
     <button id="mode-gamepad">Gamepad</button>
     <button id="mode-hands" class="active">Hands</button>
+  </div>
+  <button id="lock-btn">Acquire Lock</button>
+  <div class="indicator" style="font-size:0.8rem;">
+    <div class="dot off" id="lock-dot"></div>
+    <span id="driver-count">0 drivers</span>
   </div>
 </div>
 
@@ -423,16 +427,14 @@ const rightFillNeg = document.getElementById('right-fill-neg');
 const leftVal     = document.getElementById('left-val');
 const rightVal    = document.getElementById('right-val');
 const logEl       = document.getElementById('log');
-const connectBtn  = document.getElementById('connect-btn');
+const lockBtn     = document.getElementById('lock-btn');
+const lockDot     = document.getElementById('lock-dot');
+const driverCountEl = document.getElementById('driver-count');
 
-let writer = null;
-let writing = false;
-let port = null;
-let reader = null;
+let hasLock = false;
 let lastAck = 0;
 let lastRadio = 0;
 let radioFail = false;
-let readerClosed = false;
 let smoothAck = 0;
 let smoothRadio = 0;
 const ALPHA = 0.15;
@@ -458,44 +460,22 @@ function setDot(el, cls) {
   el.className = 'dot ' + cls;
 }
 
-function startReader() {
-  if (!port || reader) return;
-  reader = port.readable.getReader();
-  readerClosed = false;
-  (async function readLoop() {
-    try {
-      while (!readerClosed) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        for (let i = 0; i < value.length; i++) {
-          const b = value[i];
-          if (b === 0xAC) {
-            lastAck = Date.now();
-          } else if (b === 0xAE) {
-            lastRadio = Date.now();
-            radioFail = false;
-          } else if (b === 0xAD) {
-            radioFail = true;
-          }
-        }
-      }
-    } catch (e) {
-      // reader will be cleaned up on disconnect
-    }
-  })();
-}
-
-function stopReader() {
-  readerClosed = true;
-  if (reader) {
-    reader.cancel().catch(() => {});
-    reader = null;
-  }
-}
-
 function log(msg) {
   const now = new Date().toLocaleTimeString();
   logEl.textContent = `[${now}] ${msg}`;
+}
+
+function handleAckBytes(bytes) {
+  for (const b of bytes) {
+    if (b === 0xAC) {
+      lastAck = Date.now();
+    } else if (b === 0xAE) {
+      lastRadio = Date.now();
+      radioFail = false;
+    } else if (b === 0xAD) {
+      radioFail = true;
+    }
+  }
 }
 
 function crc8(bytes) {
@@ -755,9 +735,11 @@ async function startLocalWebcam() {
 function connectSignaling() {
   if (signalingWs && signalingWs.readyState <= 1) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  signalingWs = new WebSocket(`${proto}://${location.host}?role=controller`);
+  signalingWs = new WebSocket(`${proto}://${location.host}?role=driver`);
 
   signalingWs.onopen = () => {
+    setDot(serialDot, 'on');
+    serialLabel.textContent = 'Server';
     handStatusEl.textContent = 'Waiting for phone...';
     signalingWs.send(JSON.stringify({ type: 'request-stream' }));
   };
@@ -774,6 +756,32 @@ function connectSignaling() {
       phoneVideo.srcObject = null;
       cameraWrap.classList.remove('active');
       if (inputMode === 'hands') startDemo();
+    } else if (msg.type === 'driver-status') {
+      driverCountEl.textContent = msg.drivers + ' driver' + (msg.drivers === 1 ? '' : 's');
+      hasLock = msg.hasLock;
+      if (msg.hasLock) {
+        setDot(lockDot, 'on');
+        lockBtn.textContent = 'Release Lock';
+      } else if (msg.locked) {
+        setDot(lockDot, 'warn');
+        lockBtn.textContent = 'Locked by other';
+      } else {
+        setDot(lockDot, 'off');
+        lockBtn.textContent = 'Acquire Lock';
+      }
+    } else if (msg.type === 'lock-revoked') {
+      hasLock = false;
+      setDot(lockDot, 'off');
+      lockBtn.textContent = 'Acquire Lock';
+      log('Lock revoked by operator');
+    } else if (msg.type === 'lock-denied') {
+      log('Lock already held by another driver');
+    } else if (msg.type === 'ack') {
+      handleAckBytes(msg.bytes);
+    } else if (msg.type === 'operator-left') {
+      setDot(serialDot, 'off');
+      serialLabel.textContent = 'No operator';
+      log('Operator disconnected');
     } else if (msg.type === 'offer') {
       if (rtcPc) rtcPc.close();
       createRtcPc();
@@ -787,15 +795,30 @@ function connectSignaling() {
   };
 
   signalingWs.onclose = () => {
+    setDot(serialDot, 'warn');
+    serialLabel.textContent = 'Reconnecting...';
+    hasLock = false;
+    setDot(lockDot, 'off');
+    lockBtn.textContent = 'Acquire Lock';
     handStatusEl.textContent = 'Signaling disconnected';
-    setTimeout(connectSignaling, 3000);
+    // Close stale RTC connection
+    if (rtcPc) { rtcPc.close(); rtcPc = null; }
+    phoneVideo.srcObject = null;
+    cameraWrap.classList.remove('active');
+    setTimeout(connectSignaling, 2000);
   };
 }
 
+const iceServers = [
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  { urls: 'turn:global.relay.metered.ca:80', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
+  { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
+  { urls: 'turn:global.relay.metered.ca:443', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
+  { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
+];
+
 function createRtcPc() {
-  rtcPc = new RTCPeerConnection({
-    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-  });
+  rtcPc = new RTCPeerConnection({ iceServers });
 
   rtcPc.onicecandidate = (e) => {
     if (e.candidate && signalingWs && signalingWs.readyState === 1) {
@@ -824,8 +847,15 @@ function createRtcPc() {
   rtcPc.onconnectionstatechange = () => {
     log('RTC state: ' + rtcPc.connectionState);
     if (rtcPc.connectionState === 'disconnected' || rtcPc.connectionState === 'failed') {
-      handStatusEl.textContent = 'Phone connection lost';
+      handStatusEl.textContent = 'Phone connection lost, reconnecting...';
       cameraWrap.classList.remove('active');
+      phoneVideo.srcObject = null;
+      setTimeout(() => {
+        if (signalingWs && signalingWs.readyState === 1 && (!rtcPc || rtcPc.connectionState !== 'connected')) {
+          if (rtcPc) { rtcPc.close(); rtcPc = null; }
+          signalingWs.send(JSON.stringify({ type: 'request-stream' }));
+        }
+      }, 3000);
     }
   };
 }
@@ -1122,9 +1152,10 @@ async function tick() {
   if (inputs) {
     updateBars(inputs.left, inputs.right);
 
-    // Transmitter: web → ESP32 serial write OK
-    // Receiver: ESP-NOW radio link (0xAE = success, 0xAD = fail)
-    if (writer && lastRadio > 0) {
+    const canSend = hasLock && signalingWs && signalingWs.readyState === 1;
+
+    // Radio link status (acks come back from operator)
+    if (canSend && lastRadio > 0) {
       const radioDelta = Date.now() - lastRadio;
       smoothRadio = smoothRadio === 0 ? radioDelta : smoothRadio + ALPHA * (radioDelta - smoothRadio);
       const r = Math.round(smoothRadio);
@@ -1141,35 +1172,31 @@ async function tick() {
         setDot(radioDot, 'off');
         radioLabel.textContent = String(r).padStart(3) + 'ms';
       }
-    } else if (writer) {
+    } else if (canSend) {
       setDot(radioDot, 'off');
       radioLabel.textContent = '---ms';
     }
 
-    // Arduino round trip (0xAC comes back from Arduino via receiver)
+    // Arduino round trip
     const since = Date.now() - lastAck;
-    if (writer && lastAck > 0) {
+    if (canSend && lastAck > 0) {
       smoothAck = smoothAck === 0 ? since : smoothAck + ALPHA * (since - smoothAck);
       const a = Math.round(smoothAck);
       if (since < 200) setDot(rtripDot, 'on');
       else if (since < 500) setDot(rtripDot, 'warn');
       else setDot(rtripDot, 'off');
       rtripLabel.textContent = String(a).padStart(3) + 'ms';
-    } else if (writer) {
+    } else if (canSend) {
       setDot(rtripDot, 'off');
       rtripLabel.textContent = '---ms';
     }
 
-    if (writer && !writing) {
-      writing = true;
-      try {
-        await writer.write(buildFrame(inputs.left, inputs.right, inputs.buttons & 0xFF));
-        setDot(streamDot, 'on');
-      } catch (e) {
-        setDot(streamDot, 'warn');
-        log('Write error: ' + e.message);
-      }
-      writing = false;
+    if (canSend) {
+      const frame = buildFrame(inputs.left, inputs.right, inputs.buttons & 0xFF);
+      signalingWs.send(JSON.stringify({ type: 'frame', data: Array.from(frame) }));
+      setDot(streamDot, 'on');
+    } else if (!hasLock) {
+      setDot(streamDot, 'off');
     }
   } else {
     if (inputMode === 'gamepad') {
@@ -1181,38 +1208,14 @@ async function tick() {
   setTimeout(tick, 1000 / RATE_HZ);
 }
 
-async function connectSerial(existingPort) {
-  try {
-    const p = existingPort || await navigator.serial.requestPort();
-    await p.open({ baudRate: 921600 });
-    port = p;
-    writer = port.writable.getWriter();
-    setDot(serialDot, 'on');
-    serialLabel.textContent = 'Serial connected';
-    connectBtn.textContent = 'Connected';
-    connectBtn.disabled = true;
-    log('Serial opened at 921600');
-    startReader();
-
-    port.addEventListener('disconnect', () => {
-      setDot(serialDot, 'off');
-      setDot(radioDot, 'off');
-      setDot(rtripDot, 'off');
-      serialLabel.textContent = 'Serial disconnected';
-      connectBtn.textContent = 'Connect Serial';
-      connectBtn.disabled = false;
-      stopReader();
-      writer = null;
-      port = null;
-      log('Serial disconnected');
-    });
-  } catch (e) {
-    setDot(serialDot, 'off');
-    log('Serial error: ' + e.message);
+lockBtn.onclick = () => {
+  if (!signalingWs || signalingWs.readyState !== 1) return;
+  if (hasLock) {
+    signalingWs.send(JSON.stringify({ type: 'release-lock' }));
+  } else {
+    signalingWs.send(JSON.stringify({ type: 'acquire-lock' }));
   }
-}
-
-connectBtn.onclick = () => connectSerial();
+};
 
 window.addEventListener('gamepadconnected', e => {
   setDot(gamepadDot, 'on');
@@ -1255,7 +1258,7 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     estopped = true;
     document.body.classList.add('estopped');
-    estopBtn.textContent = '⚠ Enable Motors';
+    estopBtn.textContent = '⚠ E-STOPPED';
   }
 });
 
@@ -1267,14 +1270,6 @@ estopBtn.onclick = () => {
 };
 
 tick();
-
-(async function autoConnect() {
-  const ports = await navigator.serial.getPorts();
-  if (ports.length > 0) {
-    log('Auto-connecting to paired device...');
-    await connectSerial(ports[0]);
-  }
-})();
 
 // Auto-connect signaling so phone stream arrives without clicking
 if (inputMode === 'hands') {

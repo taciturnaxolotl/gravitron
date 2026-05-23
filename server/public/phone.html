@@ -151,20 +151,34 @@ function connectWS() {
   };
 }
 
+const iceServers = [
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  { urls: 'turn:global.relay.metered.ca:80', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
+  { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
+  { urls: 'turn:global.relay.metered.ca:443', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
+  { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: '091d02c472f64226ae106afc', credential: 'hjfVwiVeoGSR3yUu' },
+];
+
 function createPC() {
-  pc = new RTCPeerConnection({
-    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-  });
+  pc = new RTCPeerConnection({ iceServers });
 
   pc.onicecandidate = (e) => {
     if (e.candidate) {
-      dbg('ICE candidate: ' + e.candidate.candidate.slice(0, 60));
+      dbg('ICE candidate: ' + e.candidate.candidate.slice(0, 80));
       if (ws.readyState === 1) {
         ws.send(JSON.stringify({ type: 'candidate', candidate: e.candidate }));
       }
     } else {
       dbg('ICE gathering complete');
     }
+  };
+
+  pc.onicegatheringstatechange = () => {
+    dbg('ICE gathering: ' + pc.iceGatheringState);
+  };
+
+  pc.onicecandidateerror = (e) => {
+    dbg('ICE error: ' + e.errorCode + ' ' + e.errorText + ' url=' + e.url);
   };
 
   pc.oniceconnectionstatechange = () => {
@@ -176,7 +190,8 @@ function createPC() {
     if (pc.connectionState === 'connected') {
       setStatus('Streaming to controller', 'ok');
     } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-      setStatus('Connection lost', 'warn');
+      setStatus('Connection lost, reconnecting...', 'warn');
+      // Only re-offer if driver re-requests — don't self-initiate to avoid storms
     }
   };
 

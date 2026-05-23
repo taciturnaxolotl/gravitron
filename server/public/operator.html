@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>K2-B4 Operator</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #0f0f0f;
+    color: #e0e0e0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 20px;
+  }
+  h1 { font-size: 1.4rem; font-weight: 500; letter-spacing: 0.5px; }
+  .card {
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    border-radius: 8px;
+    padding: 20px 28px;
+    width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .card-title {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: #555;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+  }
+  .dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #444;
+    transition: background 0.3s;
+    flex-shrink: 0;
+  }
+  .dot.on  { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
+  .dot.warn{ background: #facc15; box-shadow: 0 0 6px #facc15; }
+  .dot.off { background: #444; }
+  button {
+    background: #1e1e1e;
+    color: #e0e0e0;
+    border: 1px solid #333;
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  button:hover { background: #2a2a2a; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  .stat {
+    font-size: 1.8rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: #e0e0e0;
+  }
+  .stat-label { font-size: 0.75rem; color: #666; }
+  #log {
+    font-size: 0.7rem;
+    color: #555;
+    width: 320px;
+    max-height: 120px;
+    overflow-y: auto;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<h1>K2-B4 Operator</h1>
+
+<div class="card">
+  <div class="card-title">Serial</div>
+  <div class="row">
+    <div class="indicator">
+      <div class="dot off" id="serial-dot"></div>
+      <span id="serial-label">Not connected</span>
+    </div>
+    <button id="serial-btn">Connect</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">Network</div>
+  <div class="row">
+    <div class="indicator">
+      <div class="dot off" id="ws-dot"></div>
+      <span id="ws-label">Connecting...</span>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <div class="stat" id="driver-count">0</div>
+      <div class="stat-label">drivers connected</div>
+    </div>
+    <div>
+      <div class="stat" id="lock-status">—</div>
+      <div class="stat-label">drive lock</div>
+    </div>
+  </div>
+  <button id="force-release-btn" disabled style="width:100%;">Force Release Lock</button>
+</div>
+
+<div id="log"></div>
+
+<script>
+const serialDot   = document.getElementById('serial-dot');
+const serialLabel = document.getElementById('serial-label');
+const serialBtn   = document.getElementById('serial-btn');
+const wsDot       = document.getElementById('ws-dot');
+const wsLabel     = document.getElementById('ws-label');
+const driverCount = document.getElementById('driver-count');
+const lockStatus  = document.getElementById('lock-status');
+const forceReleaseBtn = document.getElementById('force-release-btn');
+const logEl       = document.getElementById('log');
+
+function log(msg) {
+  const t = new Date().toLocaleTimeString();
+  logEl.textContent = `[${t}] ${msg}`;
+  console.log('[operator]', msg);
+}
+
+function setDot(el, cls) { el.className = 'dot ' + cls; }
+
+// ── Serial ────────────────────────────────────────────────────────────────
+let port = null, writer = null, reader = null;
+
+function crc8(bytes) {
+  let crc = 0;
+  for (const b of bytes) {
+    crc ^= b;
+    for (let i = 0; i < 8; i++)
+      crc = (crc & 0x80) ? ((crc << 1) ^ 0x31) & 0xFF : (crc << 1) & 0xFF;
+  }
+  return crc;
+}
+
+async function connectSerial(existing) {
+  try {
+    const p = existing || await navigator.serial.requestPort();
+    await p.open({ baudRate: 921600 });
+    port = p;
+    writer = port.writable.getWriter();
+    setDot(serialDot, 'on');
+    serialLabel.textContent = 'Connected';
+    serialBtn.textContent = 'Connected';
+    serialBtn.disabled = true;
+    log('Serial opened at 921600');
+    startSerialReader();
+
+    port.addEventListener('disconnect', () => {
+      setDot(serialDot, 'off');
+      serialLabel.textContent = 'Disconnected';
+      serialBtn.textContent = 'Connect';
+      serialBtn.disabled = false;
+      writer = null; port = null;
+      log('Serial disconnected');
+    });
+  } catch (e) {
+    log('Serial error: ' + e.message);
+  }
+}
+
+function startSerialReader() {
+  reader = port.readable.getReader();
+  (async () => {
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        // Forward ack bytes back to server (which routes to lock holder)
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: 'ack', bytes: Array.from(value) }));
+        }
+      }
+    } catch {}
+  })();
+}
+
+serialBtn.onclick = () => connectSerial();
+
+(async () => {
+  const ports = await navigator.serial.getPorts();
+  if (ports.length) { log('Auto-connecting serial...'); await connectSerial(ports[0]); }
+})();
+
+// ── WebSocket ─────────────────────────────────────────────────────────────
+let ws = null;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}?role=operator`);
+
+  ws.onopen = () => {
+    setDot(wsDot, 'on');
+    wsLabel.textContent = 'Connected to server';
+    log('WS connected');
+  };
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'status') {
+      driverCount.textContent = msg.drivers;
+      lockStatus.textContent = msg.locked ? 'held' : 'free';
+      forceReleaseBtn.disabled = !msg.locked;
+    }
+
+    if (msg.type === 'frame') {
+      // Received a control frame from the active driver — write to serial
+      if (writer && msg.data) {
+        const bytes = new Uint8Array(msg.data);
+        writer.write(bytes).catch(e => log('Write err: ' + e.message));
+      }
+    }
+  };
+
+  ws.onclose = () => {
+    setDot(wsDot, 'warn');
+    wsLabel.textContent = 'Disconnected — reconnecting...';
+    setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => {
+    setDot(wsDot, 'off');
+  };
+}
+
+forceReleaseBtn.onclick = () => {
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'force-release' }));
+  }
+};
+
+connect();
+</script>
+</body>
+</html>
