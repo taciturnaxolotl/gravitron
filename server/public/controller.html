@@ -677,7 +677,18 @@ function processHands(results) {
     steerHands.sort((a, b) => a[9].x - b[9].x);
     const h0 = steerHands[0], h1 = steerHands[1];
     const bothClenched = isClenched(h0) && isClenched(h1);
-    if (bothClenched) {
+
+    // Warn if hands are too close to the camera — measure wrist-to-middle-finger span
+    const handSpan = (lm) => {
+      const dx = lm[12].x - lm[0].x, dy = lm[12].y - lm[0].y;
+      return Math.sqrt(dx*dx + dy*dy);
+    };
+    const TOO_CLOSE = 0.35;
+    const tooClose = handSpan(h0) > TOO_CLOSE || handSpan(h1) > TOO_CLOSE;
+    if (tooClose) {
+      statusParts.push('⚠ Move hands back');
+      driving = false;
+    } else if (bothClenched) {
       const lx = h0[9].x, ly = h0[9].y;
       const rx = h1[9].x, ry = h1[9].y;
       const dx = rx - lx, dy = ry - ly;
@@ -696,7 +707,7 @@ function processHands(results) {
       const steerScale = 1.4 * (1 - throttle * 0.75);
       left  = Math.max(-1, Math.min(1, throttle + steerExp * steerScale));
       right = Math.max(-1, Math.min(1, throttle - steerExp * steerScale));
-    } else {
+    } else if (!tooClose) {
       statusParts.push('Open hands — stopped');
     }
   } else if (steerHands.length === 1) {
